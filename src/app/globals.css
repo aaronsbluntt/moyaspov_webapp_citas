@@ -1,0 +1,92 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --bg-primary: #0d0d0d;
+  --bg-secondary: #181426;
+  --brand-accent: #d96299;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: #0d0d0d;
+  color: #f5f3f7;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter",
+    system-ui, sans-serif;
+  min-height: 100vh;
+  overflow-x: hidden;
+  background-image: radial-gradient(
+      circle at 12% 8%,
+      rgba(217, 98, 153, 0.12) 0%,
+      transparent 38%
+    ),
+    radial-gradient(
+      circle at 88% 18%,
+      rgba(24, 20, 38, 0.9) 0%,
+      transparent 45%
+    ),
+    radial-gradient(
+      circle at 50% 95%,
+      rgba(217, 98, 153, 0.07) 0%,
+      transparent 45%
+    );
+}
+
+/* Estilo Cristal (Glassmorphism) con #181426 y acento #D96299 */
+.glass-panel {
+  background: linear-gradient(
+    145deg,
+    rgba(24, 20, 38, 0.78) 0%,
+    rgba(16, 14, 24, 0.86) 100%
+  );
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: 0 12px 40px -12px rgba(0, 0, 0, 0.7),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
+}
+
+.glass-panel-interactive {
+  background: linear-gradient(
+    145deg,
+    rgba(24, 20, 38, 0.72) 0%,
+    rgba(15, 13, 22, 0.85) 100%
+  );
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.glass-panel-interactive:hover {
+  border-color: rgba(217, 98, 153, 0.38);
+  box-shadow: 0 12px 32px -10px rgba(217, 98, 153, 0.16);
+}
+
+.brand-glow {
+  box-shadow: 0 0 28px -4px rgba(217, 98, 153, 0.45);
+}
+
+/* Scrollbar minimalista oscuro */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0d0d0d;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(217, 98, 153, 0.28);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(217, 98, 153, 0.55);
+}
