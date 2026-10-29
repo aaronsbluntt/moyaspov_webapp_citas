@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { MoyaspovLogo } from "@/components/MoyaspovLogo";
 import { ActivityChart, ChartPoint } from "@/components/ActivityChart";
+import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import {
   CalendarEvent,
   EventPriority,
@@ -67,10 +68,6 @@ const SPANISH_MONTHS_SHORT = [
   "Dic",
 ];
 
-/**
- * Convierte cualquier ISO string a YYYY-MM-DD en la zona horaria America/Santo_Domingo (-04:00)
- * evitando que el reloj UTC de Vercel salte al día siguiente después de las 8:00 PM.
- */
 function toLocalDateKey(isoStr: string): string {
   try {
     const d = new Date(isoStr);
@@ -161,13 +158,18 @@ export default function MoyaspovApp() {
   const [formInitialNote, setFormInitialNote] = useState<string>("");
   const [savingEvent, setSavingEvent] = useState<boolean>(false);
 
-  // Apartado para ingresar con su cuenta (Google / Correo)
+  // Estado de Autenticación (Supabase Auth + Foto de Perfil / Inicial)
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
-  const [authEmail, setAuthEmail] = useState<string>("w.aaroncruz@gmail.com");
-  const [authName, setAuthName] = useState<string>("Aaron Cruz");
-  const [icalUrlInput, setIcalUrlInput] = useState<string>("");
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [authEmail, setAuthEmail] = useState<string>("");
+  const [authPassword, setAuthPassword] = useState<string>("");
+  const [authName, setAuthName] = useState<string>("");
   const [authLoading, setAuthLoading] = useState<boolean>(false);
+
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
+  const [userDisplayName, setUserDisplayName] = useState<string | null>(null);
+  const [userAvatarUrl, setUserAvatarUrl] = useState<string | null>(null);
+  const [avatarError, setAvatarError] = useState<boolean>(false);
 
   const showNotice = useCallback((msg: string) => {
     setToast(msg);
@@ -176,43 +178,115 @@ export default function MoyaspovApp() {
     }, 3500);
   }, []);
 
-  // Inicializar fecha local y sesión guardada en el navegador
+  // Extraer datos del usuario (foto desde user_metadata.avatar_url o picture, e inicial de respaldo)
+  const applyAuthUser = useCallback(
+    (
+      user: {
+        email?: string;
+        user_metadata?: Record<string, unknown>;
+        identities?: Array<{ identity_data?: Record<string, unknown> }>;
+      } | null
+    ) => {
+      if (!user) {
+        setCurrentUserEmail(null);
+        setUserDisplayName(null);
+        setUserAvatarUrl(null);
+        setAvatarError(false);
+        return;
+      }
+
+      const meta = user.user_metadata || {};
+      const identityMeta = user.identities?.[0]?.identity_data || {};
+
+      const rawAvatar =
+        (typeof meta.avatar_url === "string" && meta.avatar_url) ||
+        (typeof meta.picture === "string" && meta.picture) ||
+        (typeof identityMeta.avatar_url === "string" &&
+          identityMeta.avatar_url) ||
+        (typeof identityMeta.picture === "string" && identityMeta.picture) ||
+        null;
+
+      const rawName =
+        (typeof meta.full_name === "string" && meta.full_name) ||
+        (typeof meta.name === "string" && meta.name) ||
+        (typeof identityMeta.full_name === "string" &&
+          identityMeta.full_name) ||
+        null;
+
+      setCurrentUserEmail(user.email || null);
+      setUserDisplayName(rawName);
+      setUserAvatarUrl(rawAvatar);
+      setAvatarError(false);
+    },
+    []
+  );
+
+  // Inicializar fecha local y escuchar sesión de Supabase Auth
   useEffect(() => {
     setSelectedDate(getTodayDateKey());
-    const savedEmail = localStorage.getItem("moyaspov_user_email");
-    const savedIcal = localStorage.getItem("moyaspov_ical_url");
-    if (savedEmail) {
-      setCurrentUserEmail(savedEmail);
-      setAuthEmail(savedEmail);
-    }
-    if (savedIcal) {
-      setIcalUrlInput(savedIcal);
-    }
-  }, []);
 
-  const fetchEvents = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true);
-    try {
-      const res = await fetch(
-        `/api/events?startDate=2026-01-01T00:00:00.000Z&endDate=2026-12-31T23:59:59.999Z`,
-        { cache: "no-store" }
-      );
-      const data = await res.json();
-      if (data.events) {
-        setEvents(data.events);
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) return;
+
+    supabase.auth.getUser().then(({ data }) => {
+      if (data.user) {
+        applyAuthUser(data.user);
       }
-    } catch {
-      if (!silent) showNotice("Error al cargar la agenda");
-    } finally {
-      if (!silent) setLoading(false);
-    }
-  }, [showNotice]);
+    });
 
-  // Sincronización automática en tiempo real (al cargar, al volver a la app en el teléfono y cada 10s)
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      applyAuthUser(session?.user || null);
+      if (session?.user?.email) {
+        fetch("/api/auth/session", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: session.user.email,
+            fullName:
+              session.user.user_metadata?.full_name ||
+              session.user.user_metadata?.name ||
+              session.user.email.split("@")[0],
+          }),
+        }).catch(() => {});
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, [applyAuthUser]);
+
+  // Inicial para mostrar cuando el usuario no tiene foto de perfil
+  const userInitial = useMemo(() => {
+    const source = (userDisplayName || currentUserEmail || "U").trim();
+    return source.charAt(0).toUpperCase();
+  }, [userDisplayName, currentUserEmail]);
+
+  const fetchEvents = useCallback(
+    async (silent = false) => {
+      if (!silent) setLoading(true);
+      try {
+        const res = await fetch(
+          `/api/events?startDate=2026-01-01T00:00:00.000Z&endDate=2026-12-31T23:59:59.999Z`,
+          { cache: "no-store" }
+        );
+        const data = await res.json();
+        if (data.events) {
+          setEvents(data.events);
+        }
+      } catch {
+        if (!silent) showNotice("Error al cargar la agenda");
+      } finally {
+        if (!silent) setLoading(false);
+      }
+    },
+    [showNotice]
+  );
+
+  // Sincronización automática en tiempo real
   useEffect(() => {
     fetchEvents(false);
 
-    // Disparar sincronización con Google Calendar en segundo plano
     fetch("/api/sync/google", { method: "POST" })
       .then(() => fetchEvents(true))
       .catch(() => {});
@@ -452,47 +526,71 @@ export default function MoyaspovApp() {
     await fetchEvents(true);
   };
 
-  // Ingresar con Google / Vincular Cuenta (Sin el error de OAuth deshabilitado)
-  const handleGoogleSignIn = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const targetEmail = authEmail.trim() || "w.aaroncruz@gmail.com";
+  // Iniciar sesión con Google (Supabase Auth OAuth)
+  const handleGoogleOAuth = async () => {
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) return;
     setAuthLoading(true);
     try {
-      const res = await fetch("/api/auth/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: targetEmail,
-          fullName: authName.trim() || targetEmail.split("@")[0],
-          icalUrl: icalUrlInput.trim() || undefined,
-        }),
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: window.location.origin,
+        },
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "No se pudo conectar");
-
-      localStorage.setItem("moyaspov_user_email", targetEmail);
-      if (icalUrlInput.trim()) {
-        localStorage.setItem("moyaspov_ical_url", icalUrlInput.trim());
-      }
-      setCurrentUserEmail(targetEmail);
-      setIsAuthModalOpen(false);
-
-      // Sincronizar Google Calendar inmediatamente
-      await fetch("/api/sync/google", { method: "POST" });
-      await fetchEvents(true);
-      showNotice(`Conectado como ${targetEmail}`);
+      if (error) throw error;
     } catch (err) {
       showNotice(
-        err instanceof Error ? err.message : "Error al vincular cuenta"
+        err instanceof Error ? err.message : "Error al conectar con Google"
+      );
+      setAuthLoading(false);
+    }
+  };
+
+  // Iniciar sesión o registrarse con Correo y Contraseña en Supabase Auth
+  const handleEmailAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) return;
+    setAuthLoading(true);
+    try {
+      if (authMode === "login") {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: authEmail.trim(),
+          password: authPassword,
+        });
+        if (error) throw error;
+        applyAuthUser(data.user);
+        setIsAuthModalOpen(false);
+        showNotice("Sesión iniciada correctamente");
+      } else {
+        const { data, error } = await supabase.auth.signUp({
+          email: authEmail.trim(),
+          password: authPassword,
+          options: {
+            data: { full_name: authName.trim() || authEmail.split("@")[0] },
+          },
+        });
+        if (error) throw error;
+        if (data.user) applyAuthUser(data.user);
+        setIsAuthModalOpen(false);
+        showNotice("Cuenta creada correctamente");
+      }
+    } catch (err) {
+      showNotice(
+        err instanceof Error ? err.message : "Error de autenticación"
       );
     } finally {
       setAuthLoading(false);
     }
   };
 
-  const handleSignOut = () => {
-    localStorage.removeItem("moyaspov_user_email");
-    setCurrentUserEmail(null);
+  const handleSignOut = async () => {
+    const supabase = getSupabaseBrowserClient();
+    if (supabase) {
+      await supabase.auth.signOut();
+    }
+    applyAuthUser(null);
     setIsAuthModalOpen(false);
     showNotice("Sesión cerrada");
   };
@@ -518,7 +616,7 @@ export default function MoyaspovApp() {
       );
   }, [events, selectedDate, searchQuery, sourceFilter]);
 
-  // Próximas citas cercanas (posteriores al día seleccionado)
+  // Próximas citas cercanas
   const upcomingEvents = useMemo(() => {
     const startOfSelected = new Date(
       `${selectedDate}T00:00:00-04:00`
@@ -636,7 +734,7 @@ export default function MoyaspovApp() {
         </div>
       )}
 
-      {/* HEADER MINIMALISTA — SOLO EL LOGO A LA IZQUIERDA */}
+      {/* HEADER / NAVBAR MINIMALISTA — SOLO EL LOGO A LA IZQUIERDA Y AVATAR CIRCULAR A LA DERECHA */}
       <header className="sticky top-0 z-30 border-b border-white/[0.06] bg-[#0d0d0d]/85 backdrop-blur-xl">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 h-16 sm:h-20 flex items-center justify-between gap-2">
           {/* Únicamente el logo SVG */}
@@ -653,8 +751,8 @@ export default function MoyaspovApp() {
             <MoyaspovLogo size={40} />
           </button>
 
-          {/* Controles derechos bien estructurados en móvil y desktop */}
-          <div className="flex items-center gap-1.5 sm:gap-2">
+          {/* Controles derechos + Avatar circular minimalista en la esquina superior derecha */}
+          <div className="flex items-center gap-2">
             <button
               onClick={() => setSearchOpen((prev) => !prev)}
               title="Buscar o filtrar"
@@ -696,21 +794,37 @@ export default function MoyaspovApp() {
               <span>Nueva Cita</span>
             </button>
 
-            <button
-              onClick={() => setIsAuthModalOpen(true)}
-              className="h-9 sm:h-10 px-3 sm:px-3.5 rounded-xl bg-[#181426] hover:bg-[#181426]/90 border border-white/10 hover:border-[#D96299]/40 text-xs font-medium text-zinc-200 flex items-center gap-1.5 transition"
-            >
-              <span
-                className={`h-2 w-2 rounded-full ${
-                  currentUserEmail ? "bg-emerald-400" : "bg-[#D96299]"
-                }`}
-              />
-              <span className="max-w-[90px] sm:max-w-[120px] truncate">
-                {currentUserEmail
-                  ? currentUserEmail.split("@")[0]
-                  : "Ingresar"}
-              </span>
-            </button>
+            {/* AVATAR EN PEQUEÑO CÍRCULO MINIMALISTA (FOTO O INICIAL) SI INICIÓ SESIÓN */}
+            {currentUserEmail ? (
+              <button
+                onClick={() => setIsAuthModalOpen(true)}
+                title={userDisplayName || currentUserEmail}
+                aria-label="Perfil de usuario"
+                className="h-9 w-9 sm:h-10 sm:w-10 rounded-full bg-[#181426] border border-[#D96299]/50 hover:border-[#D96299] p-0.5 flex items-center justify-center transition shadow-md shadow-black/50 overflow-hidden shrink-0"
+              >
+                {userAvatarUrl && !avatarError ? (
+                  <img
+                    src={userAvatarUrl}
+                    alt={userDisplayName || currentUserEmail}
+                    referrerPolicy="no-referrer"
+                    onError={() => setAvatarError(true)}
+                    className="h-full w-full rounded-full object-cover"
+                  />
+                ) : (
+                  <span className="text-xs sm:text-sm font-semibold text-[#D96299] uppercase select-none">
+                    {userInitial}
+                  </span>
+                )}
+              </button>
+            ) : (
+              <button
+                onClick={() => setIsAuthModalOpen(true)}
+                className="h-9 sm:h-10 px-3.5 rounded-xl bg-[#181426] hover:bg-[#181426]/90 border border-white/10 hover:border-[#D96299]/40 text-xs font-medium text-zinc-200 flex items-center gap-1.5 transition"
+              >
+                <User className="w-3.5 h-3.5 text-[#D96299]" />
+                <span>Ingresar</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -771,7 +885,6 @@ export default function MoyaspovApp() {
 
       {/* CONTENIDO PRINCIPAL BIEN ESTRUCTURADO EN TELÉFONO Y DESKTOP */}
       <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-5 sm:py-8">
-        {/* Cabecera de Fecha y Tira Semanal (Siempre visible arriba) */}
         <div className="mb-5 space-y-3.5">
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0">
@@ -809,7 +922,7 @@ export default function MoyaspovApp() {
             )}
           </div>
 
-          {/* Tira de 7 días perfectamente proporcionada para pantallas móviles */}
+          {/* Tira de 7 días */}
           {!searchQuery && (
             <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
               {weekStripDays.map((d) => {
@@ -845,7 +958,7 @@ export default function MoyaspovApp() {
             </div>
           )}
 
-          {/* Selector de vista en Teléfono (Agenda vs Gráfico) para evitar scroll desordenado */}
+          {/* Selector de vista en Teléfono (Citas vs Actividad) */}
           <div className="grid grid-cols-2 gap-1.5 p-1 rounded-2xl bg-[#181426]/90 border border-white/[0.07] lg:hidden">
             <button
               onClick={() => setMobileSection("agenda")}
@@ -880,7 +993,6 @@ export default function MoyaspovApp() {
               mobileSection === "chart" ? "hidden lg:block" : "block"
             }`}
           >
-            {/* Lista de Citas del Día */}
             <div className="space-y-2.5 sm:space-y-3">
               {loading ? (
                 <div className="glass-panel rounded-3xl p-8 text-center text-xs text-zinc-500">
@@ -909,7 +1021,6 @@ export default function MoyaspovApp() {
                       onClick={() => setActiveEventId(ev.id)}
                       className="glass-panel-interactive rounded-2xl p-3.5 sm:p-4 cursor-pointer flex items-stretch gap-3"
                     >
-                      {/* Barra lateral de acento */}
                       <div
                         className={`w-1 rounded-full shrink-0 ${
                           ev.status === "completed"
@@ -919,7 +1030,6 @@ export default function MoyaspovApp() {
                       />
 
                       <div className="flex-1 min-w-0 space-y-1">
-                        {/* Fila 1: Horario + Origen + Botón Completar */}
                         <div className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-2 min-w-0">
                             <span className="text-xs font-semibold text-[#D96299] truncate">
@@ -963,7 +1073,6 @@ export default function MoyaspovApp() {
                           </div>
                         </div>
 
-                        {/* Fila 2: Título completo bien legible en móvil */}
                         <h3
                           className={`text-sm sm:text-[15px] font-semibold leading-snug break-words ${
                             ev.status === "completed"
@@ -974,7 +1083,6 @@ export default function MoyaspovApp() {
                           {ev.title}
                         </h3>
 
-                        {/* Fila 3: Ubicación o vista previa de nota */}
                         {(ev.location || firstNote) && (
                           <div className="pt-0.5 space-y-1">
                             {ev.location && (
@@ -1110,7 +1218,7 @@ export default function MoyaspovApp() {
         </div>
       </main>
 
-      {/* DOCK INFERIOR FIJO EN TELÉFONO (< SM) PARA ACCIONES RÁPIDAS */}
+      {/* DOCK INFERIOR FIJO EN TELÉFONO (< SM) */}
       <div className="fixed bottom-0 inset-x-0 z-30 sm:hidden border-t border-white/[0.08] bg-[#0d0d0d]/90 backdrop-blur-xl px-4 py-3">
         <div className="grid grid-cols-2 gap-2.5 max-w-md mx-auto">
           <button
@@ -1195,7 +1303,6 @@ export default function MoyaspovApp() {
               </p>
             )}
 
-            {/* Notas / Comentarios */}
             <div className="space-y-2.5">
               <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
                 Notas y Resumen ({activeEvent.event_notes?.length || 0})
@@ -1443,14 +1550,14 @@ export default function MoyaspovApp() {
         </div>
       )}
 
-      {/* APARTADO PARA INGRESAR CON GOOGLE / CUENTA */}
+      {/* MODAL DE CUENTA / PERFIL / LOGIN */}
       {isAuthModalOpen && (
         <div
           className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
           onClick={() => setIsAuthModalOpen(false)}
         >
           <div
-            className="glass-panel border-t sm:border border-[#D96299]/40 rounded-t-3xl sm:rounded-3xl max-w-sm w-full p-5 sm:p-6 pb-8 sm:pb-6 space-y-4"
+            className="glass-panel border-t sm:border border-[#D96299]/40 rounded-t-3xl sm:rounded-3xl max-w-sm w-full p-5 sm:p-6 pb-8 sm:pb-6 space-y-5"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
@@ -1463,70 +1570,142 @@ export default function MoyaspovApp() {
               </button>
             </div>
 
-            <div>
-              <h3 className="text-base font-bold text-white">
-                {currentUserEmail
-                  ? "Cuenta de Google Conectada"
-                  : "Ingresar con Google"}
-              </h3>
-              <p className="text-xs text-zinc-400 mt-0.5">
-                Sincroniza tus actividades de Google Calendar con tu agenda.
-              </p>
-            </div>
+            {currentUserEmail ? (
+              <div className="space-y-4">
+                <div className="flex items-center gap-3.5 p-3.5 rounded-2xl bg-[#0d0d0d]/80 border border-white/[0.06]">
+                  <div className="h-12 w-12 rounded-full bg-[#181426] border border-[#D96299]/50 p-0.5 flex items-center justify-center overflow-hidden shrink-0">
+                    {userAvatarUrl && !avatarError ? (
+                      <img
+                        src={userAvatarUrl}
+                        alt={userDisplayName || currentUserEmail}
+                        referrerPolicy="no-referrer"
+                        onError={() => setAvatarError(true)}
+                        className="h-full w-full rounded-full object-cover"
+                      />
+                    ) : (
+                      <span className="text-base font-semibold text-[#D96299] uppercase">
+                        {userInitial}
+                      </span>
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    {userDisplayName && (
+                      <p className="text-sm font-bold text-white truncate">
+                        {userDisplayName}
+                      </p>
+                    )}
+                    <p className="text-xs text-zinc-400 truncate">
+                      {currentUserEmail}
+                    </p>
+                  </div>
+                </div>
 
-            <form onSubmit={handleGoogleSignIn} className="space-y-3">
-              <div>
-                <label className="block text-[11px] text-zinc-400 mb-1">
-                  Correo de Google Calendar
-                </label>
-                <input
-                  type="email"
-                  required
-                  value={authEmail}
-                  onChange={(e) => setAuthEmail(e.target.value)}
-                  placeholder="tu-correo@gmail.com"
-                  className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-3.5 py-2.5 text-xs text-white outline-none"
-                />
+                <button
+                  type="button"
+                  onClick={handleSignOut}
+                  className="w-full py-2.5 rounded-xl bg-white/5 hover:bg-red-500/20 text-xs text-zinc-300 hover:text-red-300 flex items-center justify-center gap-2 transition"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span>Cerrar sesión</span>
+                </button>
               </div>
+            ) : (
+              <>
+                <div>
+                  <h3 className="text-base font-bold text-white">
+                    {authMode === "login"
+                      ? "Ingresa a tu cuenta"
+                      : "Crear una cuenta"}
+                  </h3>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    Accede con Google o con tu correo electrónico.
+                  </p>
+                </div>
 
-              <div>
-                <label className="block text-[11px] text-zinc-400 mb-1">
-                  Enlace iCal secreto de Google Calendar (Opcional para nube)
-                </label>
-                <input
-                  type="url"
-                  value={icalUrlInput}
-                  onChange={(e) => setIcalUrlInput(e.target.value)}
-                  placeholder="https://calendar.google.com/calendar/ical/.../basic.ics"
-                  className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-3.5 py-2 text-xs text-white outline-none"
-                />
-              </div>
+                <button
+                  type="button"
+                  onClick={handleGoogleOAuth}
+                  disabled={authLoading}
+                  className="w-full py-3 rounded-xl bg-[#D96299] hover:bg-[#e68ab5] text-[#0d0d0d] font-semibold text-xs flex items-center justify-center gap-2 transition shadow-lg shadow-[#D96299]/20"
+                >
+                  <span>Continuar con Google</span>
+                </button>
 
-              <button
-                type="submit"
-                disabled={authLoading}
-                className="w-full py-3 rounded-xl bg-[#D96299] hover:bg-[#e68ab5] text-[#0d0d0d] font-semibold text-xs flex items-center justify-center gap-2 transition shadow-lg shadow-[#D96299]/20"
-              >
-                <User className="w-4 h-4" />
-                <span>
-                  {authLoading
-                    ? "Conectando y sincronizando..."
-                    : currentUserEmail
-                    ? "Actualizar y Sincronizar con Google"
-                    : "Continuar con Google"}
-                </span>
-              </button>
-            </form>
+                <div className="relative flex py-1 items-center">
+                  <div className="flex-grow border-t border-white/[0.07]" />
+                  <span className="flex-shrink mx-3 text-[11px] text-zinc-500">
+                    o con correo
+                  </span>
+                  <div className="flex-grow border-t border-white/[0.07]" />
+                </div>
 
-            {currentUserEmail && (
-              <button
-                type="button"
-                onClick={handleSignOut}
-                className="w-full py-2.5 rounded-xl bg-white/5 hover:bg-red-500/20 text-xs text-zinc-300 hover:text-red-300 flex items-center justify-center gap-2 transition"
-              >
-                <LogOut className="w-4 h-4" />
-                <span>Cerrar sesión ({currentUserEmail})</span>
-              </button>
+                <form onSubmit={handleEmailAuth} className="space-y-3">
+                  {authMode === "register" && (
+                    <input
+                      type="text"
+                      required
+                      value={authName}
+                      onChange={(e) => setAuthName(e.target.value)}
+                      placeholder="Tu nombre"
+                      className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-3.5 py-2.5 text-xs text-white outline-none"
+                    />
+                  )}
+                  <input
+                    type="email"
+                    required
+                    value={authEmail}
+                    onChange={(e) => setAuthEmail(e.target.value)}
+                    placeholder="Correo electrónico"
+                    className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-3.5 py-2.5 text-xs text-white outline-none"
+                  />
+                  <input
+                    type="password"
+                    required
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    placeholder="Contraseña"
+                    className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-3.5 py-2.5 text-xs text-white outline-none"
+                  />
+
+                  <button
+                    type="submit"
+                    disabled={authLoading}
+                    className="w-full py-2.5 rounded-xl bg-[#181426] hover:bg-white/10 border border-white/10 text-xs text-zinc-200 font-medium transition"
+                  >
+                    {authLoading
+                      ? "Procesando..."
+                      : authMode === "login"
+                      ? "Ingresar con correo"
+                      : "Registrarme"}
+                  </button>
+                </form>
+
+                <p className="text-center text-xs text-zinc-400">
+                  {authMode === "login" ? (
+                    <>
+                      ¿No tienes cuenta?{" "}
+                      <button
+                        type="button"
+                        onClick={() => setAuthMode("register")}
+                        className="text-[#D96299] hover:underline font-medium"
+                      >
+                        Regístrate
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      ¿Ya tienes cuenta?{" "}
+                      <button
+                        type="button"
+                        onClick={() => setAuthMode("login")}
+                        className="text-[#D96299] hover:underline font-medium"
+                      >
+                        Inicia sesión
+                      </button>
+                    </>
+                  )}
+                </p>
+              </>
             )}
           </div>
         </div>
