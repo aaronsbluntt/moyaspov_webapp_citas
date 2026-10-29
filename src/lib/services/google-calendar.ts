@@ -199,8 +199,47 @@ export async function fetchNormalizedGoogleEvents(options: {
   timeMax: string;
   userId?: string;
 }): Promise<NormalizedGoogleEvent[]> {
+  const isDefaultOwner =
+    !options.userId || options.userId === DEFAULT_USER_ID;
+
+  // Si es una cuenta nueva distinta al propietario principal, verificar si tiene integración propia
+  let userHasCustomIntegration = false;
+  let customIcalUrl = "";
+  if (!isDefaultOwner && isSupabaseServerConfigured() && options.userId) {
+    const supabase = getSupabaseServerClient();
+    const { data: integration } = await supabase
+      .from("user_integrations")
+      .select("*")
+      .eq("user_id", options.userId)
+      .eq("provider", "google_calendar")
+      .eq("is_active", true)
+      .maybeSingle();
+
+    if (integration) {
+      userHasCustomIntegration = Boolean(
+        integration.refresh_token || integration.access_token
+      );
+      const cfg = integration.config as Record<string, unknown> | undefined;
+      if (
+        cfg &&
+        typeof cfg.ical_url === "string" &&
+        cfg.ical_url.startsWith("http")
+      ) {
+        customIcalUrl = cfg.ical_url;
+      }
+    }
+
+    // Cuenta nueva sin integración de Google Calendar conectada -> retorna vacío
+    if (!userHasCustomIntegration && !customIcalUrl) {
+      return [];
+    }
+  }
+
   // 1. Intentar con OAuth2 oficial
-  if (isGoogleCalendarConfigured()) {
+  if (
+    (isDefaultOwner && isGoogleCalendarConfigured()) ||
+    userHasCustomIntegration
+  ) {
     try {
       const { calendar, calendarId } = await getGoogleCalendarClient(
         options.userId

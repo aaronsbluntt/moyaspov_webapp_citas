@@ -24,18 +24,25 @@ export interface ChartPoint {
 interface ActivityChartProps {
   data: ChartPoint[];
   metric?: "totalEvents" | "hoursBooked";
+  accentColor?: string;
+  themeMode?: "dark" | "light";
   onSelectDate?: (dateIso: string) => void;
 }
 
 export function ActivityChart({
   data,
   metric = "totalEvents",
+  accentColor = "#D96299",
+  themeMode = "dark",
   onSelectDate,
 }: ActivityChartProps) {
-  if (!data || data.length === 0) {
+  const hasAnyActivity =
+    data && data.length > 0 && data.some((d) => d.totalEvents > 0);
+
+  if (!hasAnyActivity) {
     return (
-      <div className="h-[220px] flex items-center justify-center text-xs text-zinc-500">
-        Sin actividad registrada en este periodo.
+      <div className="h-[220px] flex items-center justify-center text-xs text-[var(--text-muted)] border border-dashed border-[var(--border-subtle)] rounded-2xl">
+        Sin actividad registrada.
       </div>
     );
   }
@@ -54,46 +61,58 @@ export function ActivityChart({
         >
           <CartesianGrid
             strokeDasharray="3 3"
-            stroke="rgba(255,255,255,0.04)"
+            stroke={
+              themeMode === "dark"
+                ? "rgba(255,255,255,0.05)"
+                : "rgba(20,18,30,0.06)"
+            }
             vertical={false}
           />
           <XAxis
             dataKey="label"
-            stroke="#71717a"
+            stroke={themeMode === "dark" ? "#71717a" : "#827f94"}
             fontSize={11}
             tickLine={false}
             axisLine={false}
           />
           <YAxis
-            stroke="#71717a"
+            stroke={themeMode === "dark" ? "#71717a" : "#827f94"}
             fontSize={11}
             tickLine={false}
             axisLine={false}
             allowDecimals={false}
           />
           <Tooltip
-            cursor={{ stroke: "rgba(217, 98, 153, 0.25)", strokeWidth: 1 }}
+            cursor={{ stroke: accentColor, strokeOpacity: 0.3, strokeWidth: 1 }}
             contentStyle={{
-              backgroundColor: "rgba(24, 20, 38, 0.96)",
-              borderColor: "rgba(217, 98, 153, 0.35)",
+              backgroundColor:
+                themeMode === "dark"
+                  ? "rgba(24, 20, 38, 0.96)"
+                  : "rgba(255, 255, 255, 0.96)",
+              borderColor: accentColor,
               borderRadius: "12px",
-              boxShadow: "0 10px 25px rgba(0, 0, 0, 0.6)",
-              color: "#f4f4f5",
+              boxShadow: "0 10px 25px rgba(0, 0, 0, 0.25)",
+              color: themeMode === "dark" ? "#f4f4f5" : "#14121e",
               fontSize: "12px",
             }}
-            labelStyle={{ color: "#D96299", fontWeight: 600, marginBottom: 2 }}
+            labelStyle={{ color: accentColor, fontWeight: 600, marginBottom: 2 }}
           />
           <Line
             type="monotone"
             dataKey={metric === "totalEvents" ? "totalEvents" : "hoursBooked"}
             name={metric === "totalEvents" ? "Citas" : "Horas"}
-            stroke="#D96299"
+            stroke={accentColor}
             strokeWidth={2.5}
-            dot={{ r: 3.5, fill: "#D96299", strokeWidth: 2, stroke: "#181426" }}
+            dot={{
+              r: 3.5,
+              fill: accentColor,
+              strokeWidth: 2,
+              stroke: themeMode === "dark" ? "#181426" : "#ffffff",
+            }}
             activeDot={{
               r: 5.5,
-              fill: "#F5A3C7",
-              stroke: "#D96299",
+              fill: accentColor,
+              stroke: themeMode === "dark" ? "#ffffff" : "#14121e",
               strokeWidth: 2,
             }}
           />

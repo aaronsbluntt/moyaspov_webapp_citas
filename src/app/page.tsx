@@ -19,6 +19,9 @@ import {
   LogOut,
   Calendar as CalendarIcon,
   TrendingUp,
+  Sun,
+  Moon,
+  Palette,
 } from "lucide-react";
 import { MoyaspovLogo } from "@/components/MoyaspovLogo";
 import { ActivityChart, ChartPoint } from "@/components/ActivityChart";
@@ -33,6 +36,47 @@ import {
 
 type ChartRange = "week" | "month";
 type MobileSection = "agenda" | "chart";
+type ThemeMode = "dark" | "light";
+type AccentKey = "rose" | "violet" | "cyan" | "emerald";
+
+interface AccentPreset {
+  key: AccentKey;
+  label: string;
+  hex: string;
+  hover: string;
+  rgb: string;
+}
+
+const ACCENT_PRESETS: AccentPreset[] = [
+  {
+    key: "rose",
+    label: "Rosa",
+    hex: "#D96299",
+    hover: "#e68ab5",
+    rgb: "217, 98, 153",
+  },
+  {
+    key: "violet",
+    label: "Violeta",
+    hex: "#8B5CF6",
+    hover: "#a78bfa",
+    rgb: "139, 92, 246",
+  },
+  {
+    key: "cyan",
+    label: "Cian",
+    hex: "#06B6D4",
+    hover: "#22d3ee",
+    rgb: "6, 182, 212",
+  },
+  {
+    key: "emerald",
+    label: "Esmeralda",
+    hex: "#10B981",
+    hover: "#34d399",
+    rgb: "16, 185, 129",
+  },
+];
 
 interface ParsedPreview {
   rawText: string;
@@ -78,11 +122,11 @@ function toLocalDateKey(isoStr: string): string {
       day: "2-digit",
     }).formatToParts(d);
     const y = parts.find((p) => p.type === "year")?.value || "2026";
-    const m = parts.find((p) => p.type === "month")?.value || "10";
-    const day = parts.find((p) => p.type === "day")?.value || "28";
+    const m = parts.find((p) => p.type === "month")?.value || "01";
+    const day = parts.find((p) => p.type === "day")?.value || "01";
     return `${y}-${m}-${day}`;
   } catch {
-    return "2026-10-28";
+    return new Date().toISOString().slice(0, 10);
   }
 }
 
@@ -117,11 +161,56 @@ function formatReadableDate(dateKey: string): string {
 }
 
 export default function MoyaspovApp() {
-  const [selectedDate, setSelectedDate] = useState<string>("2026-10-28");
+  const [selectedDate, setSelectedDate] = useState<string>(() =>
+    getTodayDateKey()
+  );
   const [chartRange, setChartRange] = useState<ChartRange>("week");
   const [mobileSection, setMobileSection] = useState<MobileSection>("agenda");
 
-  // Eventos desde Supabase
+  // Tema (Modo Oscuro / Claro) y Color de Acento (4 opciones)
+  const [themeMode, setThemeMode] = useState<ThemeMode>("dark");
+  const [accentKey, setAccentKey] = useState<AccentKey>("rose");
+  const [accentMenuOpen, setAccentMenuOpen] = useState<boolean>(false);
+
+  const activeAccent = useMemo(
+    () =>
+      ACCENT_PRESETS.find((preset) => preset.key === accentKey) ||
+      ACCENT_PRESETS[0],
+    [accentKey]
+  );
+
+  // Cargar preferencias guardadas de tema y acento al iniciar
+  useEffect(() => {
+    try {
+      const savedTheme = localStorage.getItem("moyaspov_theme") as ThemeMode;
+      if (savedTheme === "dark" || savedTheme === "light") {
+        setThemeMode(savedTheme);
+      }
+      const savedAccent = localStorage.getItem("moyaspov_accent") as AccentKey;
+      if (ACCENT_PRESETS.some((p) => p.key === savedAccent)) {
+        setAccentKey(savedAccent);
+      }
+    } catch {
+      // Ignorar errores de almacenamiento local
+    }
+  }, []);
+
+  // Aplicar variables CSS globalmente al instante cuando cambie el tema o color de acento
+  useEffect(() => {
+    const root = document.documentElement;
+    root.setAttribute("data-theme", themeMode);
+    root.style.setProperty("--accent", activeAccent.hex);
+    root.style.setProperty("--accent-hover", activeAccent.hover);
+    root.style.setProperty("--accent-rgb", activeAccent.rgb);
+    try {
+      localStorage.setItem("moyaspov_theme", themeMode);
+      localStorage.setItem("moyaspov_accent", activeAccent.key);
+    } catch {
+      // Ignorar errores de almacenamiento local
+    }
+  }, [themeMode, activeAccent]);
+
+  // Eventos desde Supabase (sin mock data; vacío si no hay usuario autenticado o cuenta nueva)
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [syncing, setSyncing] = useState<boolean>(false);
@@ -135,7 +224,9 @@ export default function MoyaspovApp() {
   // Modal de Texto Rápido Notion
   const [isNotionModalOpen, setIsNotionModalOpen] = useState<boolean>(false);
   const [notionInput, setNotionInput] = useState<string>("");
-  const [notionPreview, setNotionPreview] = useState<ParsedPreview | null>(null);
+  const [notionPreview, setNotionPreview] = useState<ParsedPreview | null>(
+    null
+  );
   const [parsingNotion, setParsingNotion] = useState<boolean>(false);
 
   // Evento activo en el Modal de Detalle + Notas
@@ -148,7 +239,7 @@ export default function MoyaspovApp() {
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
   const [formTitle, setFormTitle] = useState<string>("");
   const [formDescription, setFormDescription] = useState<string>("");
-  const [formDate, setFormDate] = useState<string>("2026-10-28");
+  const [formDate, setFormDate] = useState<string>(() => getTodayDateKey());
   const [formStartTime, setFormStartTime] = useState<string>("18:00");
   const [formEndTime, setFormEndTime] = useState<string>("19:00");
   const [formType, setFormType] = useState<EventType>("session");
@@ -158,7 +249,7 @@ export default function MoyaspovApp() {
   const [formInitialNote, setFormInitialNote] = useState<string>("");
   const [savingEvent, setSavingEvent] = useState<boolean>(false);
 
-  // Estado de Autenticación (Supabase Auth + Foto de Perfil / Inicial)
+  // Estado de Autenticación (Supabase Auth + Foto de Perfil / Inicial + ID de Perfil)
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [authEmail, setAuthEmail] = useState<string>("");
@@ -166,7 +257,10 @@ export default function MoyaspovApp() {
   const [authName, setAuthName] = useState<string>("");
   const [authLoading, setAuthLoading] = useState<boolean>(false);
 
-  const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(
+    null
+  );
   const [userDisplayName, setUserDisplayName] = useState<string | null>(null);
   const [userAvatarUrl, setUserAvatarUrl] = useState<string | null>(null);
   const [avatarError, setAvatarError] = useState<boolean>(false);
@@ -179,19 +273,23 @@ export default function MoyaspovApp() {
   }, []);
 
   // Extraer datos del usuario (foto desde user_metadata.avatar_url o picture, e inicial de respaldo)
-  const applyAuthUser = useCallback(
-    (
+  // y resolver su perfil en Supabase para aislar sus datos reales
+  const resolveAndApplyAuthUser = useCallback(
+    async (
       user: {
         email?: string;
         user_metadata?: Record<string, unknown>;
         identities?: Array<{ identity_data?: Record<string, unknown> }>;
       } | null
     ) => {
-      if (!user) {
+      if (!user || !user.email) {
+        setCurrentUserId(null);
         setCurrentUserEmail(null);
         setUserDisplayName(null);
         setUserAvatarUrl(null);
         setAvatarError(false);
+        setEvents([]);
+        setLoading(false);
         return;
       }
 
@@ -213,10 +311,28 @@ export default function MoyaspovApp() {
           identityMeta.full_name) ||
         null;
 
-      setCurrentUserEmail(user.email || null);
+      setCurrentUserEmail(user.email);
       setUserDisplayName(rawName);
       setUserAvatarUrl(rawAvatar);
       setAvatarError(false);
+
+      try {
+        const res = await fetch("/api/auth/session", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: user.email,
+            fullName: rawName || user.email.split("@")[0],
+            avatarUrl: rawAvatar,
+          }),
+        });
+        const data = await res.json();
+        if (data.profileId) {
+          setCurrentUserId(data.profileId);
+        }
+      } catch {
+        // Si falla la resolución de perfil, mantener estado seguro sin datos de prueba
+      }
     },
     []
   );
@@ -226,35 +342,28 @@ export default function MoyaspovApp() {
     setSelectedDate(getTodayDateKey());
 
     const supabase = getSupabaseBrowserClient();
-    if (!supabase) return;
+    if (!supabase) {
+      setLoading(false);
+      return;
+    }
 
     supabase.auth.getUser().then(({ data }) => {
       if (data.user) {
-        applyAuthUser(data.user);
+        resolveAndApplyAuthUser(data.user);
+      } else {
+        setEvents([]);
+        setLoading(false);
       }
     });
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
-      applyAuthUser(session?.user || null);
-      if (session?.user?.email) {
-        fetch("/api/auth/session", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            email: session.user.email,
-            fullName:
-              session.user.user_metadata?.full_name ||
-              session.user.user_metadata?.name ||
-              session.user.email.split("@")[0],
-          }),
-        }).catch(() => {});
-      }
+      resolveAndApplyAuthUser(session?.user || null);
     });
 
     return () => subscription.unsubscribe();
-  }, [applyAuthUser]);
+  }, [resolveAndApplyAuthUser]);
 
   // Inicial para mostrar cuando el usuario no tiene foto de perfil
   const userInitial = useMemo(() => {
@@ -264,15 +373,26 @@ export default function MoyaspovApp() {
 
   const fetchEvents = useCallback(
     async (silent = false) => {
+      // Condición estricta: si no hay usuario autenticado, agenda y gráfico vacíos
+      if (!currentUserId || !currentUserEmail) {
+        setEvents([]);
+        setLoading(false);
+        return;
+      }
+
       if (!silent) setLoading(true);
       try {
         const res = await fetch(
-          `/api/events?startDate=2026-01-01T00:00:00.000Z&endDate=2026-12-31T23:59:59.999Z`,
+          `/api/events?userId=${encodeURIComponent(
+            currentUserId
+          )}&startDate=2026-01-01T00:00:00.000Z&endDate=2026-12-31T23:59:59.999Z`,
           { cache: "no-store" }
         );
         const data = await res.json();
-        if (data.events) {
+        if (Array.isArray(data.events)) {
           setEvents(data.events);
+        } else {
+          setEvents([]);
         }
       } catch {
         if (!silent) showNotice("Error al cargar la agenda");
@@ -280,26 +400,46 @@ export default function MoyaspovApp() {
         if (!silent) setLoading(false);
       }
     },
-    [showNotice]
+    [currentUserId, currentUserEmail, showNotice]
   );
 
-  // Sincronización automática en tiempo real
+  // Sincronización automática en tiempo real únicamente cuando hay usuario autenticado
   useEffect(() => {
+    if (!currentUserId || !currentUserEmail) {
+      setEvents([]);
+      setLoading(false);
+      return;
+    }
+
     fetchEvents(false);
 
-    fetch("/api/sync/google", { method: "POST" })
+    const syncPayload = JSON.stringify({ userId: currentUserId });
+
+    fetch("/api/sync/google", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: syncPayload,
+    })
       .then(() => fetchEvents(true))
       .catch(() => {});
 
     const interval = setInterval(() => {
-      fetch("/api/sync/google", { method: "POST" })
+      fetch("/api/sync/google", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: syncPayload,
+      })
         .then(() => fetchEvents(true))
         .catch(() => fetchEvents(true));
     }, 10000);
 
     const handleVisibility = () => {
       if (document.visibilityState === "visible") {
-        fetch("/api/sync/google", { method: "POST" })
+        fetch("/api/sync/google", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: syncPayload,
+        })
           .then(() => fetchEvents(true))
           .catch(() => fetchEvents(true));
       }
@@ -313,7 +453,7 @@ export default function MoyaspovApp() {
       window.removeEventListener("focus", handleVisibility);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [fetchEvents]);
+  }, [currentUserId, currentUserEmail, fetchEvents]);
 
   // Previsualización del texto rápido de Notion
   useEffect(() => {
@@ -340,12 +480,18 @@ export default function MoyaspovApp() {
   const handleSyncNotionText = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!notionInput.trim()) return;
+    if (!currentUserId) {
+      setIsNotionModalOpen(false);
+      setIsAuthModalOpen(true);
+      showNotice("Inicia sesión para agendar citas");
+      return;
+    }
     setParsingNotion(true);
     try {
       const res = await fetch("/api/sync/notion", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: notionInput }),
+        body: JSON.stringify({ text: notionInput, userId: currentUserId }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Error al procesar");
@@ -366,9 +512,18 @@ export default function MoyaspovApp() {
   };
 
   const handleManualSync = async () => {
+    if (!currentUserId) {
+      setIsAuthModalOpen(true);
+      showNotice("Inicia sesión para sincronizar tu calendario");
+      return;
+    }
     setSyncing(true);
     try {
-      await fetch("/api/sync/google", { method: "POST" });
+      await fetch("/api/sync/google", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: currentUserId }),
+      });
       await fetchEvents(true);
       showNotice("Sincronizado con Google Calendar");
     } finally {
@@ -377,6 +532,11 @@ export default function MoyaspovApp() {
   };
 
   const openCreateModal = (defaultDate?: string) => {
+    if (!currentUserId) {
+      setIsAuthModalOpen(true);
+      showNotice("Inicia sesión para agregar citas");
+      return;
+    }
     setEditingEvent(null);
     setFormTitle("");
     setFormDescription("");
@@ -417,7 +577,7 @@ export default function MoyaspovApp() {
 
   const handleSaveEvent = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formTitle.trim()) return;
+    if (!formTitle.trim() || !currentUserId) return;
     setSavingEvent(true);
     try {
       const startIso = new Date(
@@ -449,6 +609,7 @@ export default function MoyaspovApp() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            user_id: currentUserId,
             title: formTitle.trim(),
             description: formDescription.trim() || null,
             event_type: formType,
@@ -457,6 +618,7 @@ export default function MoyaspovApp() {
             start_time: startIso,
             end_time: endIso,
             location: formLocation.trim() || null,
+            color: activeAccent.hex,
             source: "webapp",
             initial_note: formInitialNote.trim() || undefined,
           }),
@@ -505,6 +667,7 @@ export default function MoyaspovApp() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          author_id: currentUserId || undefined,
           content: newNoteContent.trim(),
           note_type: "comment",
         }),
@@ -560,7 +723,7 @@ export default function MoyaspovApp() {
           password: authPassword,
         });
         if (error) throw error;
-        applyAuthUser(data.user);
+        await resolveAndApplyAuthUser(data.user);
         setIsAuthModalOpen(false);
         showNotice("Sesión iniciada correctamente");
       } else {
@@ -572,7 +735,7 @@ export default function MoyaspovApp() {
           },
         });
         if (error) throw error;
-        if (data.user) applyAuthUser(data.user);
+        if (data.user) await resolveAndApplyAuthUser(data.user);
         setIsAuthModalOpen(false);
         showNotice("Cuenta creada correctamente");
       }
@@ -590,13 +753,14 @@ export default function MoyaspovApp() {
     if (supabase) {
       await supabase.auth.signOut();
     }
-    applyAuthUser(null);
+    await resolveAndApplyAuthUser(null);
     setIsAuthModalOpen(false);
     showNotice("Sesión cerrada");
   };
 
-  // Eventos del día seleccionado
+  // Eventos del día seleccionado (si no hay usuario autenticado o cuenta nueva, retorna [])
   const displayedEvents = useMemo(() => {
+    if (!currentUserId || !currentUserEmail) return [];
     const q = searchQuery.trim().toLowerCase();
     return events
       .filter((ev) => {
@@ -614,10 +778,18 @@ export default function MoyaspovApp() {
         (a, b) =>
           new Date(a.start_time).getTime() - new Date(b.start_time).getTime()
       );
-  }, [events, selectedDate, searchQuery, sourceFilter]);
+  }, [
+    events,
+    selectedDate,
+    searchQuery,
+    sourceFilter,
+    currentUserId,
+    currentUserEmail,
+  ]);
 
   // Próximas citas cercanas
   const upcomingEvents = useMemo(() => {
+    if (!currentUserId || !currentUserEmail) return [];
     const startOfSelected = new Date(
       `${selectedDate}T00:00:00-04:00`
     ).getTime();
@@ -633,7 +805,7 @@ export default function MoyaspovApp() {
           new Date(a.start_time).getTime() - new Date(b.start_time).getTime()
       )
       .slice(0, 4);
-  }, [events, selectedDate]);
+  }, [events, selectedDate, currentUserId, currentUserEmail]);
 
   const activeEvent = useMemo(
     () => events.find((e) => e.id === activeEventId) || null,
@@ -649,10 +821,14 @@ export default function MoyaspovApp() {
       const dt = new Date(base);
       dt.setDate(base.getDate() + offset);
       const key = toLocalDateKey(dt.toISOString());
-      const count = events.filter(
-        (ev) =>
-          ev.status !== "cancelled" && toLocalDateKey(ev.start_time) === key
-      ).length;
+      const count =
+        currentUserId && currentUserEmail
+          ? events.filter(
+              (ev) =>
+                ev.status !== "cancelled" &&
+                toLocalDateKey(ev.start_time) === key
+            ).length
+          : 0;
       days.push({
         key,
         dayName: SPANISH_DAYS_SHORT[dt.getDay()],
@@ -662,10 +838,14 @@ export default function MoyaspovApp() {
       });
     }
     return days;
-  }, [selectedDate, events]);
+  }, [selectedDate, events, currentUserId, currentUserEmail]);
 
-  // Datos para el Chart Line
+  // Datos para el Chart Line (completamente vacío si no hay usuario autenticado o si la cuenta es nueva sin eventos)
   const chartData: ChartPoint[] = useMemo(() => {
+    if (!currentUserId || !currentUserEmail || events.length === 0) {
+      return [];
+    }
+
     const [y, m, d] = selectedDate.split("-").map(Number);
     const baseDate = new Date(y, m - 1, d, 12, 0, 0);
 
@@ -714,7 +894,7 @@ export default function MoyaspovApp() {
       }
     }
     return points;
-  }, [events, selectedDate, chartRange]);
+  }, [events, selectedDate, chartRange, currentUserId, currentUserEmail]);
 
   const shiftSelectedDate = (daysDelta: number) => {
     const [y, m, d] = selectedDate.split("-").map(Number);
@@ -723,19 +903,22 @@ export default function MoyaspovApp() {
   };
 
   return (
-    <div className="min-h-dvh bg-[#0d0d0d] text-zinc-100 flex flex-col pb-24 sm:pb-10">
+    <div className="min-h-dvh bg-[var(--bg-primary)] text-[var(--text-primary)] flex flex-col pb-24 sm:pb-10 transition-colors duration-200">
       {/* Notificación flotante */}
       {toast && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 sm:top-auto sm:bottom-6 sm:left-auto sm:right-6 sm:translate-x-0 z-50 glass-panel border-[#D96299]/40 px-4 py-2.5 rounded-2xl flex items-center gap-2.5 shadow-2xl w-[90%] max-w-xs sm:w-auto">
-          <span className="h-2 w-2 rounded-full bg-[#D96299] shrink-0" />
-          <span className="text-xs font-medium text-zinc-100 truncate">
+        <div
+          className="fixed top-20 left-1/2 -translate-x-1/2 sm:top-auto sm:bottom-6 sm:left-auto sm:right-6 sm:translate-x-0 z-50 glass-panel px-4 py-2.5 rounded-2xl flex items-center gap-2.5 shadow-2xl w-[90%] max-w-xs sm:w-auto"
+          style={{ borderColor: "rgba(var(--accent-rgb), 0.45)" }}
+        >
+          <span className="h-2 w-2 rounded-full bg-[var(--accent)] shrink-0" />
+          <span className="text-xs font-medium text-[var(--text-primary)] truncate">
             {toast}
           </span>
         </div>
       )}
 
-      {/* HEADER / NAVBAR MINIMALISTA — SOLO EL LOGO A LA IZQUIERDA Y AVATAR CIRCULAR A LA DERECHA */}
-      <header className="sticky top-0 z-30 border-b border-white/[0.06] bg-[#0d0d0d]/85 backdrop-blur-xl">
+      {/* HEADER / NAVBAR MINIMALISTA — LOGO, TEMA (OSCURO/CLARO), 4 ACENTOS Y AVATAR */}
+      <header className="sticky top-0 z-30 border-b border-[var(--border-subtle)] bg-[var(--bg-primary)]/85 backdrop-blur-xl transition-colors duration-200">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 h-16 sm:h-20 flex items-center justify-between gap-2">
           {/* Únicamente el logo SVG */}
           <button
@@ -745,21 +928,108 @@ export default function MoyaspovApp() {
               setSelectedDate(getTodayDateKey());
               setMobileSection("agenda");
             }}
-            className="p-1.5 rounded-2xl hover:bg-white/[0.04] transition flex items-center justify-center shrink-0"
+            className="p-1.5 rounded-2xl hover:bg-[var(--bg-secondary)]/60 transition flex items-center justify-center shrink-0"
             title="Inicio"
           >
             <MoyaspovLogo size={40} />
           </button>
 
-          {/* Controles derechos + Avatar circular minimalista en la esquina superior derecha */}
-          <div className="flex items-center gap-2">
+          {/* Controles derechos: Tema Oscuro/Claro + Selector 4 Colores de Acento + Acciones + Avatar */}
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            {/* Selector minimalista de 4 colores de acento */}
+            <div className="relative">
+              {/* En pantallas medianas/grandes: pastilla minimalista con los 4 puntos de color */}
+              <div className="hidden sm:flex items-center gap-1.5 px-2.5 h-10 rounded-xl bg-[var(--bg-secondary)]/70 border border-[var(--border-subtle)]">
+                {ACCENT_PRESETS.map((preset) => {
+                  const isSelected = preset.key === accentKey;
+                  return (
+                    <button
+                      key={preset.key}
+                      type="button"
+                      onClick={() => setAccentKey(preset.key)}
+                      title={`Acento: ${preset.label}`}
+                      aria-label={`Color de acento ${preset.label}`}
+                      className={`h-4 w-4 rounded-full transition-transform flex items-center justify-center ${
+                        isSelected
+                          ? "scale-110 ring-2 ring-[var(--text-primary)] ring-offset-2 ring-offset-[var(--bg-secondary)]"
+                          : "opacity-65 hover:opacity-100 hover:scale-105"
+                      }`}
+                      style={{ backgroundColor: preset.hex }}
+                    />
+                  );
+                })}
+              </div>
+
+              {/* En teléfono: botón compacto con dropdown minimalista de los 4 colores */}
+              <button
+                type="button"
+                onClick={() => setAccentMenuOpen((prev) => !prev)}
+                title="Cambiar color de acento"
+                aria-label="Cambiar color de acento"
+                className="sm:hidden h-9 w-9 rounded-xl bg-[var(--bg-secondary)]/70 border border-[var(--border-subtle)] flex items-center justify-center transition"
+              >
+                <span
+                  className="h-4 w-4 rounded-full ring-2 ring-[var(--text-primary)]/40"
+                  style={{ backgroundColor: activeAccent.hex }}
+                />
+              </button>
+
+              {accentMenuOpen && (
+                <div className="sm:hidden absolute right-0 mt-2 p-2 rounded-2xl glass-panel border border-[var(--border-subtle)] shadow-xl flex items-center gap-2 z-50">
+                  <Palette className="w-3.5 h-3.5 text-[var(--text-secondary)] ml-1" />
+                  {ACCENT_PRESETS.map((preset) => {
+                    const isSelected = preset.key === accentKey;
+                    return (
+                      <button
+                        key={preset.key}
+                        type="button"
+                        onClick={() => {
+                          setAccentKey(preset.key);
+                          setAccentMenuOpen(false);
+                        }}
+                        title={preset.label}
+                        className={`h-5 w-5 rounded-full transition-transform ${
+                          isSelected
+                            ? "scale-110 ring-2 ring-[var(--text-primary)]"
+                            : "opacity-75"
+                        }`}
+                        style={{ backgroundColor: preset.hex }}
+                      />
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Botón minimalista Modo Oscuro / Modo Claro */}
+            <button
+              type="button"
+              onClick={() =>
+                setThemeMode((prev) => (prev === "dark" ? "light" : "dark"))
+              }
+              title={
+                themeMode === "dark"
+                  ? "Cambiar a Modo Claro"
+                  : "Cambiar a Modo Oscuro"
+              }
+              aria-label="Cambiar tema claro u oscuro"
+              className="h-9 w-9 sm:h-10 sm:w-10 rounded-xl bg-[var(--bg-secondary)]/70 hover:bg-[var(--bg-secondary)] border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--accent)] flex items-center justify-center transition"
+            >
+              {themeMode === "dark" ? (
+                <Sun className="w-4 h-4" />
+              ) : (
+                <Moon className="w-4 h-4" />
+              )}
+            </button>
+
+            {/* Buscar / Filtrar */}
             <button
               onClick={() => setSearchOpen((prev) => !prev)}
               title="Buscar o filtrar"
               className={`h-9 w-9 sm:h-10 sm:w-10 rounded-xl border flex items-center justify-center transition ${
                 searchOpen || searchQuery || sourceFilter !== "all"
-                  ? "bg-[#181426] border-[#D96299]/50 text-[#D96299]"
-                  : "bg-[#181426]/60 border-white/[0.07] text-zinc-400 hover:text-white"
+                  ? "bg-[var(--bg-secondary)] border-[var(--accent)] text-[var(--accent)]"
+                  : "bg-[var(--bg-secondary)]/70 border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
               }`}
             >
               <Search className="w-4 h-4" />
@@ -768,7 +1038,7 @@ export default function MoyaspovApp() {
             <button
               onClick={() => setIsNotionModalOpen(true)}
               title="Agendar desde texto rápido (Notion)"
-              className="hidden sm:flex h-10 w-10 rounded-xl bg-[#181426]/60 hover:bg-[#181426] border border-white/[0.07] hover:border-[#D96299]/40 text-zinc-400 hover:text-[#D96299] items-center justify-center transition"
+              className="hidden sm:flex h-10 w-10 rounded-xl bg-[var(--bg-secondary)]/70 hover:bg-[var(--bg-secondary)] border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--accent)] items-center justify-center transition"
             >
               <Sparkles className="w-4 h-4" />
             </button>
@@ -777,18 +1047,21 @@ export default function MoyaspovApp() {
               onClick={handleManualSync}
               disabled={syncing}
               title="Sincronizar con Google Calendar"
-              className="h-9 w-9 sm:h-10 sm:w-10 rounded-xl bg-[#181426]/60 hover:bg-[#181426] border border-white/[0.07] text-zinc-400 hover:text-white flex items-center justify-center transition"
+              className="h-9 w-9 sm:h-10 sm:w-10 rounded-xl bg-[var(--bg-secondary)]/70 hover:bg-[var(--bg-secondary)] border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center justify-center transition"
             >
               <RefreshCw
                 className={`w-4 h-4 ${
-                  syncing ? "animate-spin text-[#D96299]" : ""
+                  syncing ? "animate-spin text-[var(--accent)]" : ""
                 }`}
               />
             </button>
 
             <button
               onClick={() => openCreateModal()}
-              className="hidden sm:flex px-4 py-2.5 rounded-xl bg-[#D96299] hover:bg-[#e68ab5] text-[#0d0d0d] font-semibold text-xs items-center gap-1.5 transition shadow-lg shadow-[#D96299]/20"
+              className="hidden sm:flex px-4 py-2.5 rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[#0d0d0d] font-semibold text-xs items-center gap-1.5 transition shadow-lg"
+              style={{
+                boxShadow: "0 8px 20px -4px rgba(var(--accent-rgb), 0.3)",
+              }}
             >
               <Plus className="w-4 h-4 stroke-[2.5]" />
               <span>Nueva Cita</span>
@@ -800,7 +1073,7 @@ export default function MoyaspovApp() {
                 onClick={() => setIsAuthModalOpen(true)}
                 title={userDisplayName || currentUserEmail}
                 aria-label="Perfil de usuario"
-                className="h-9 w-9 sm:h-10 sm:w-10 rounded-full bg-[#181426] border border-[#D96299]/50 hover:border-[#D96299] p-0.5 flex items-center justify-center transition shadow-md shadow-black/50 overflow-hidden shrink-0"
+                className="h-9 w-9 sm:h-10 sm:w-10 rounded-full bg-[var(--bg-secondary)] border border-[var(--accent)] p-0.5 flex items-center justify-center transition shadow-sm overflow-hidden shrink-0"
               >
                 {userAvatarUrl && !avatarError ? (
                   <img
@@ -811,7 +1084,7 @@ export default function MoyaspovApp() {
                     className="h-full w-full rounded-full object-cover"
                   />
                 ) : (
-                  <span className="text-xs sm:text-sm font-semibold text-[#D96299] uppercase select-none">
+                  <span className="text-xs sm:text-sm font-semibold text-[var(--accent)] uppercase select-none">
                     {userInitial}
                   </span>
                 )}
@@ -819,9 +1092,9 @@ export default function MoyaspovApp() {
             ) : (
               <button
                 onClick={() => setIsAuthModalOpen(true)}
-                className="h-9 sm:h-10 px-3.5 rounded-xl bg-[#181426] hover:bg-[#181426]/90 border border-white/10 hover:border-[#D96299]/40 text-xs font-medium text-zinc-200 flex items-center gap-1.5 transition"
+                className="h-9 sm:h-10 px-3.5 rounded-xl bg-[var(--bg-secondary)] hover:bg-[var(--bg-secondary)]/80 border border-[var(--border-subtle)] text-xs font-medium text-[var(--text-primary)] flex items-center gap-1.5 transition"
               >
-                <User className="w-3.5 h-3.5 text-[#D96299]" />
+                <User className="w-3.5 h-3.5 text-[var(--accent)]" />
                 <span>Ingresar</span>
               </button>
             )}
@@ -830,17 +1103,17 @@ export default function MoyaspovApp() {
 
         {/* Barra desplegable de búsqueda y filtros */}
         {searchOpen && (
-          <div className="border-t border-white/[0.06] bg-[#181426]/80 backdrop-blur-xl">
+          <div className="border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)]/90 backdrop-blur-xl">
             <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3 space-y-2.5 sm:space-y-0 sm:flex sm:items-center sm:gap-3">
               <div className="relative flex-1">
-                <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <Search className="w-3.5 h-3.5 text-[var(--text-muted)] absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
                   autoFocus
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="Buscar cita por título, nota o lugar..."
-                  className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] pl-9 pr-4 py-2 text-xs text-white outline-none"
+                  className="w-full rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] focus:border-[var(--accent)] pl-9 pr-4 py-2 text-xs text-[var(--text-primary)] outline-none"
                 />
               </div>
 
@@ -854,9 +1127,17 @@ export default function MoyaspovApp() {
                       onClick={() => setSourceFilter(src)}
                       className={`px-2.5 py-1.5 rounded-lg border transition shrink-0 ${
                         sourceFilter === src
-                          ? "bg-[#D96299]/20 border-[#D96299] text-[#D96299] font-medium"
-                          : "bg-[#0d0d0d] border-white/10 text-zinc-400 hover:text-white"
+                          ? "border-[var(--accent)] text-[var(--accent)] font-medium"
+                          : "bg-[var(--bg-input)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
                       }`}
+                      style={
+                        sourceFilter === src
+                          ? {
+                              backgroundColor:
+                                "rgba(var(--accent-rgb), 0.14)",
+                            }
+                          : undefined
+                      }
                     >
                       {src === "all"
                         ? "Todos"
@@ -875,7 +1156,7 @@ export default function MoyaspovApp() {
                   onChange={(e) =>
                     e.target.value && setSelectedDate(e.target.value)
                   }
-                  className="rounded-xl bg-[#0d0d0d] border border-white/10 px-2.5 py-1.5 text-xs text-zinc-200 outline-none focus:border-[#D96299] shrink-0"
+                  className="rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] px-2.5 py-1.5 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] shrink-0"
                 />
               </div>
             </div>
@@ -883,15 +1164,15 @@ export default function MoyaspovApp() {
         )}
       </header>
 
-      {/* CONTENIDO PRINCIPAL BIEN ESTRUCTURADO EN TELÉFONO Y DESKTOP */}
+      {/* CONTENIDO PRINCIPAL */}
       <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-5 sm:py-8">
         <div className="mb-5 space-y-3.5">
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0">
-              <p className="text-[10px] sm:text-[11px] uppercase tracking-widest text-[#D96299] font-semibold">
+              <p className="text-[10px] sm:text-[11px] uppercase tracking-widest text-[var(--accent)] font-semibold">
                 {searchQuery ? "Resultados" : "Agenda Diaria"}
               </p>
-              <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight truncate">
+              <h1 className="text-xl sm:text-2xl font-bold text-[var(--text-primary)] tracking-tight truncate">
                 {searchQuery
                   ? `"${searchQuery}"`
                   : formatReadableDate(selectedDate)}
@@ -902,19 +1183,19 @@ export default function MoyaspovApp() {
               <div className="flex items-center gap-1 shrink-0">
                 <button
                   onClick={() => shiftSelectedDate(-1)}
-                  className="h-9 w-9 rounded-xl bg-[#181426] border border-white/[0.07] hover:border-[#D96299]/40 text-zinc-300 flex items-center justify-center transition"
+                  className="h-9 w-9 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-subtle)] hover:border-[var(--accent)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center justify-center transition"
                 >
                   <ChevronLeft className="w-4 h-4" />
                 </button>
                 <button
                   onClick={() => setSelectedDate(getTodayDateKey())}
-                  className="h-9 px-3 rounded-xl bg-[#181426] border border-white/[0.07] hover:border-[#D96299]/40 text-xs font-medium text-zinc-200 transition"
+                  className="h-9 px-3 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-subtle)] hover:border-[var(--accent)] text-xs font-medium text-[var(--text-primary)] transition"
                 >
                   Hoy
                 </button>
                 <button
                   onClick={() => shiftSelectedDate(1)}
-                  className="h-9 w-9 rounded-xl bg-[#181426] border border-white/[0.07] hover:border-[#D96299]/40 text-zinc-300 flex items-center justify-center transition"
+                  className="h-9 w-9 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-subtle)] hover:border-[var(--accent)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center justify-center transition"
                 >
                   <ChevronRight className="w-4 h-4" />
                 </button>
@@ -933,8 +1214,8 @@ export default function MoyaspovApp() {
                     onClick={() => setSelectedDate(d.key)}
                     className={`py-2 sm:py-2.5 rounded-2xl flex flex-col items-center justify-center border transition ${
                       active
-                        ? "bg-[#D96299] text-[#0d0d0d] border-[#D96299] font-semibold shadow-lg shadow-[#D96299]/20"
-                        : "bg-[#181426]/65 border-white/[0.06] text-zinc-400 hover:text-white"
+                        ? "bg-[var(--accent)] text-[#0d0d0d] border-[var(--accent)] font-semibold shadow-md"
+                        : "bg-[var(--bg-secondary)]/75 border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
                     }`}
                   >
                     <span className="text-[9px] sm:text-[10px] uppercase tracking-tight">
@@ -948,7 +1229,7 @@ export default function MoyaspovApp() {
                         d.hasEvents
                           ? active
                             ? "bg-[#0d0d0d]"
-                            : "bg-[#D96299]"
+                            : "bg-[var(--accent)]"
                           : "bg-transparent"
                       }`}
                     />
@@ -959,13 +1240,13 @@ export default function MoyaspovApp() {
           )}
 
           {/* Selector de vista en Teléfono (Citas vs Actividad) */}
-          <div className="grid grid-cols-2 gap-1.5 p-1 rounded-2xl bg-[#181426]/90 border border-white/[0.07] lg:hidden">
+          <div className="grid grid-cols-2 gap-1.5 p-1 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-subtle)] lg:hidden">
             <button
               onClick={() => setMobileSection("agenda")}
               className={`py-2 rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 transition ${
                 mobileSection === "agenda"
-                  ? "bg-[#D96299] text-[#0d0d0d] font-semibold shadow"
-                  : "text-zinc-400"
+                  ? "bg-[var(--accent)] text-[#0d0d0d] font-semibold shadow"
+                  : "text-[var(--text-secondary)]"
               }`}
             >
               <CalendarIcon className="w-3.5 h-3.5" />
@@ -975,8 +1256,8 @@ export default function MoyaspovApp() {
               onClick={() => setMobileSection("chart")}
               className={`py-2 rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 transition ${
                 mobileSection === "chart"
-                  ? "bg-[#D96299] text-[#0d0d0d] font-semibold shadow"
-                  : "text-zinc-400"
+                  ? "bg-[var(--accent)] text-[#0d0d0d] font-semibold shadow"
+                  : "text-[var(--text-secondary)]"
               }`}
             >
               <TrendingUp className="w-3.5 h-3.5" />
@@ -995,17 +1276,31 @@ export default function MoyaspovApp() {
           >
             <div className="space-y-2.5 sm:space-y-3">
               {loading ? (
-                <div className="glass-panel rounded-3xl p-8 text-center text-xs text-zinc-500">
+                <div className="glass-panel rounded-3xl p-8 text-center text-xs text-[var(--text-muted)]">
                   Cargando agenda...
+                </div>
+              ) : !currentUserEmail || !currentUserId ? (
+                <div className="glass-panel rounded-3xl p-8 text-center space-y-3">
+                  <p className="text-sm text-[var(--text-secondary)]">
+                    Tu agenda está vacía. Inicia sesión para ver o agendar tus
+                    citas.
+                  </p>
+                  <button
+                    onClick={() => setIsAuthModalOpen(true)}
+                    className="inline-flex items-center gap-1.5 text-xs text-[var(--accent)] font-semibold hover:underline"
+                  >
+                    <User className="w-3.5 h-3.5" />
+                    <span>Ingresar a mi cuenta</span>
+                  </button>
                 </div>
               ) : displayedEvents.length === 0 ? (
                 <div className="glass-panel rounded-3xl p-8 text-center space-y-3">
-                  <p className="text-sm text-zinc-300">
+                  <p className="text-sm text-[var(--text-secondary)]">
                     Sin citas programadas para este día.
                   </p>
                   <button
                     onClick={() => openCreateModal(selectedDate)}
-                    className="inline-flex items-center gap-1.5 text-xs text-[#D96299] font-medium hover:underline"
+                    className="inline-flex items-center gap-1.5 text-xs text-[var(--accent)] font-semibold hover:underline"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     <span>Agregar cita en esta fecha</span>
@@ -1024,22 +1319,22 @@ export default function MoyaspovApp() {
                       <div
                         className={`w-1 rounded-full shrink-0 ${
                           ev.status === "completed"
-                            ? "bg-zinc-600"
-                            : "bg-[#D96299]"
+                            ? "bg-[var(--text-muted)]"
+                            : "bg-[var(--accent)]"
                         }`}
                       />
 
                       <div className="flex-1 min-w-0 space-y-1">
                         <div className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-2 min-w-0">
-                            <span className="text-xs font-semibold text-[#D96299] truncate">
+                            <span className="text-xs font-semibold text-[var(--accent)] truncate">
                               {formatTimeRange(
                                 ev.start_time,
                                 ev.end_time,
                                 ev.all_day
                               )}
                             </span>
-                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/[0.05] text-zinc-400 border border-white/[0.06] shrink-0">
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-[var(--bg-input)] text-[var(--text-secondary)] border border-[var(--border-subtle)] shrink-0">
                               {ev.source === "google_calendar"
                                 ? "Google"
                                 : ev.source === "notion"
@@ -1050,7 +1345,13 @@ export default function MoyaspovApp() {
 
                           <div className="flex items-center gap-1.5 shrink-0">
                             {notesCount > 0 && (
-                              <span className="px-1.5 py-0.5 rounded-md bg-[#D96299]/10 text-[10px] text-[#D96299] flex items-center gap-1">
+                              <span
+                                className="px-1.5 py-0.5 rounded-md text-[10px] text-[var(--accent)] flex items-center gap-1"
+                                style={{
+                                  backgroundColor:
+                                    "rgba(var(--accent-rgb), 0.14)",
+                                }}
+                              >
                                 <MessageSquareText className="w-3 h-3" />
                                 {notesCount}
                               </span>
@@ -1062,8 +1363,8 @@ export default function MoyaspovApp() {
                               }}
                               className={`h-5 w-5 rounded-full border flex items-center justify-center transition ${
                                 ev.status === "completed"
-                                  ? "bg-[#D96299] border-[#D96299] text-[#0d0d0d]"
-                                  : "border-white/25 hover:border-[#D96299]"
+                                  ? "bg-[var(--accent)] border-[var(--accent)] text-[#0d0d0d]"
+                                  : "border-[var(--border-subtle)] hover:border-[var(--accent)]"
                               }`}
                             >
                               {ev.status === "completed" && (
@@ -1076,8 +1377,8 @@ export default function MoyaspovApp() {
                         <h3
                           className={`text-sm sm:text-[15px] font-semibold leading-snug break-words ${
                             ev.status === "completed"
-                              ? "line-through text-zinc-500"
-                              : "text-white"
+                              ? "line-through text-[var(--text-muted)]"
+                              : "text-[var(--text-primary)]"
                           }`}
                         >
                           {ev.title}
@@ -1086,14 +1387,14 @@ export default function MoyaspovApp() {
                         {(ev.location || firstNote) && (
                           <div className="pt-0.5 space-y-1">
                             {ev.location && (
-                              <p className="text-xs text-zinc-400 flex items-center gap-1 truncate">
-                                <MapPin className="w-3 h-3 text-[#D96299] shrink-0" />
+                              <p className="text-xs text-[var(--text-secondary)] flex items-center gap-1 truncate">
+                                <MapPin className="w-3 h-3 text-[var(--accent)] shrink-0" />
                                 <span className="truncate">{ev.location}</span>
                               </p>
                             )}
                             {firstNote && (
-                              <p className="text-xs text-zinc-400 line-clamp-1 flex items-center gap-1.5">
-                                <MessageSquareText className="w-3 h-3 text-[#D96299] shrink-0" />
+                              <p className="text-xs text-[var(--text-secondary)] line-clamp-1 flex items-center gap-1.5">
+                                <MessageSquareText className="w-3 h-3 text-[var(--accent)] shrink-0" />
                                 <span className="truncate">
                                   {firstNote.content}
                                 </span>
@@ -1111,7 +1412,7 @@ export default function MoyaspovApp() {
             {/* Próximas citas cercanas */}
             {!searchQuery && upcomingEvents.length > 0 && (
               <div className="pt-2 space-y-2.5">
-                <h2 className="text-[11px] uppercase tracking-wider text-zinc-500 font-semibold px-1">
+                <h2 className="text-[11px] uppercase tracking-wider text-[var(--text-muted)] font-semibold px-1">
                   Próximas citas
                 </h2>
                 <div className="space-y-2">
@@ -1122,11 +1423,11 @@ export default function MoyaspovApp() {
                       className="glass-panel-interactive rounded-2xl px-4 py-3 cursor-pointer flex items-center justify-between gap-3"
                     >
                       <div className="min-w-0">
-                        <p className="text-sm font-medium text-white truncate">
+                        <p className="text-sm font-medium text-[var(--text-primary)] truncate">
                           {ev.title}
                         </p>
-                        <p className="text-xs text-zinc-400 mt-0.5 truncate">
-                          <span className="text-[#D96299] font-medium">
+                        <p className="text-xs text-[var(--text-secondary)] mt-0.5 truncate">
+                          <span className="text-[var(--accent)] font-medium">
                             {formatReadableDate(toLocalDateKey(ev.start_time))}
                           </span>{" "}
                           •{" "}
@@ -1137,7 +1438,7 @@ export default function MoyaspovApp() {
                           )}
                         </p>
                       </div>
-                      <ChevronRight className="w-4 h-4 text-zinc-500 shrink-0" />
+                      <ChevronRight className="w-4 h-4 text-[var(--text-muted)] shrink-0" />
                     </div>
                   ))}
                 </div>
@@ -1154,21 +1455,21 @@ export default function MoyaspovApp() {
             <div className="glass-panel rounded-3xl p-4 sm:p-5">
               <div className="flex items-center justify-between mb-4">
                 <div>
-                  <h2 className="text-sm font-semibold text-white">
+                  <h2 className="text-sm font-semibold text-[var(--text-primary)]">
                     Actividad de la Agenda
                   </h2>
-                  <p className="text-[11px] text-zinc-400">
+                  <p className="text-[11px] text-[var(--text-secondary)]">
                     Días más ocupados (toca un punto para ir al día)
                   </p>
                 </div>
 
-                <div className="flex items-center rounded-xl bg-[#0d0d0d] p-0.5 border border-white/[0.07] text-[11px]">
+                <div className="flex items-center rounded-xl bg-[var(--bg-input)] p-0.5 border border-[var(--border-subtle)] text-[11px]">
                   <button
                     onClick={() => setChartRange("week")}
                     className={`px-2.5 py-1 rounded-lg transition ${
                       chartRange === "week"
-                        ? "bg-[#D96299] text-[#0d0d0d] font-semibold"
-                        : "text-zinc-400 hover:text-white"
+                        ? "bg-[var(--accent)] text-[#0d0d0d] font-semibold"
+                        : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
                     }`}
                   >
                     Semana
@@ -1177,8 +1478,8 @@ export default function MoyaspovApp() {
                     onClick={() => setChartRange("month")}
                     className={`px-2.5 py-1 rounded-lg transition ${
                       chartRange === "month"
-                        ? "bg-[#D96299] text-[#0d0d0d] font-semibold"
-                        : "text-zinc-400 hover:text-white"
+                        ? "bg-[var(--accent)] text-[#0d0d0d] font-semibold"
+                        : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
                     }`}
                   >
                     Mes
@@ -1188,6 +1489,8 @@ export default function MoyaspovApp() {
 
               <ActivityChart
                 data={chartData}
+                accentColor={activeAccent.hex}
+                themeMode={themeMode}
                 onSelectDate={(dateIso) => {
                   setSelectedDate(dateIso);
                   setMobileSection("agenda");
@@ -1200,37 +1503,43 @@ export default function MoyaspovApp() {
               className="hidden lg:flex w-full glass-panel-interactive rounded-2xl p-4 items-center justify-between text-left"
             >
               <div className="flex items-center gap-3">
-                <div className="h-9 w-9 rounded-xl bg-[#D96299]/15 border border-[#D96299]/30 flex items-center justify-center">
-                  <Sparkles className="w-4 h-4 text-[#D96299]" />
+                <div
+                  className="h-9 w-9 rounded-xl border flex items-center justify-center"
+                  style={{
+                    backgroundColor: "rgba(var(--accent-rgb), 0.14)",
+                    borderColor: "rgba(var(--accent-rgb), 0.32)",
+                  }}
+                >
+                  <Sparkles className="w-4 h-4 text-[var(--accent)]" />
                 </div>
                 <div>
-                  <p className="text-xs font-semibold text-white">
+                  <p className="text-xs font-semibold text-[var(--text-primary)]">
                     Agendar con texto rápido (Notion)
                   </p>
-                  <p className="text-[11px] text-zinc-400">
+                  <p className="text-[11px] text-[var(--text-secondary)]">
                     Ej: &ldquo;Sesion jueves 29 oct 26 a las 8:00 pm&rdquo;
                   </p>
                 </div>
               </div>
-              <Plus className="w-4 h-4 text-[#D96299]" />
+              <Plus className="w-4 h-4 text-[var(--accent)]" />
             </button>
           </div>
         </div>
       </main>
 
       {/* DOCK INFERIOR FIJO EN TELÉFONO (< SM) */}
-      <div className="fixed bottom-0 inset-x-0 z-30 sm:hidden border-t border-white/[0.08] bg-[#0d0d0d]/90 backdrop-blur-xl px-4 py-3">
+      <div className="fixed bottom-0 inset-x-0 z-30 sm:hidden border-t border-[var(--border-subtle)] bg-[var(--bg-primary)]/90 backdrop-blur-xl px-4 py-3">
         <div className="grid grid-cols-2 gap-2.5 max-w-md mx-auto">
           <button
             onClick={() => setIsNotionModalOpen(true)}
-            className="py-2.5 px-3 rounded-2xl bg-[#181426] border border-[#D96299]/30 text-xs font-medium text-zinc-100 flex items-center justify-center gap-1.5"
+            className="py-2.5 px-3 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-subtle)] text-xs font-medium text-[var(--text-primary)] flex items-center justify-center gap-1.5"
           >
-            <Sparkles className="w-3.5 h-3.5 text-[#D96299]" />
+            <Sparkles className="w-3.5 h-3.5 text-[var(--accent)]" />
             <span>Texto Notion</span>
           </button>
           <button
             onClick={() => openCreateModal()}
-            className="py-2.5 px-3 rounded-2xl bg-[#D96299] text-[#0d0d0d] font-semibold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-[#D96299]/25"
+            className="py-2.5 px-3 rounded-2xl bg-[var(--accent)] text-[#0d0d0d] font-semibold text-xs flex items-center justify-center gap-1.5 shadow-lg"
           >
             <Plus className="w-4 h-4 stroke-[2.5]" />
             <span>Nueva Cita</span>
@@ -1241,16 +1550,16 @@ export default function MoyaspovApp() {
       {/* MODAL / BOTTOM SHEET DE DETALLE DE CITA Y NOTAS */}
       {activeEvent && (
         <div
-          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
+          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
           onClick={() => setActiveEventId(null)}
         >
           <div
-            className="glass-panel border-t sm:border border-[#D96299]/35 rounded-t-3xl sm:rounded-3xl max-w-md w-full p-5 sm:p-6 pb-8 sm:pb-6 space-y-4 max-h-[88dvh] overflow-y-auto"
+            className="glass-panel border-t sm:border border-[var(--border-subtle)] rounded-t-3xl sm:rounded-3xl max-w-md w-full p-5 sm:p-6 pb-8 sm:pb-6 space-y-4 max-h-[88dvh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <span className="text-[11px] text-[#D96299] font-medium block">
+                <span className="text-[11px] text-[var(--accent)] font-medium block">
                   {formatReadableDate(toLocalDateKey(activeEvent.start_time))} •{" "}
                   {formatTimeRange(
                     activeEvent.start_time,
@@ -1258,12 +1567,12 @@ export default function MoyaspovApp() {
                     activeEvent.all_day
                   )}
                 </span>
-                <h3 className="text-base sm:text-lg font-bold text-white mt-0.5 break-words">
+                <h3 className="text-base sm:text-lg font-bold text-[var(--text-primary)] mt-0.5 break-words">
                   {activeEvent.title}
                 </h3>
                 {activeEvent.location && (
-                  <p className="text-xs text-zinc-400 flex items-center gap-1 mt-1">
-                    <MapPin className="w-3.5 h-3.5 text-[#D96299] shrink-0" />
+                  <p className="text-xs text-[var(--text-secondary)] flex items-center gap-1 mt-1">
+                    <MapPin className="w-3.5 h-3.5 text-[var(--accent)] shrink-0" />
                     <span className="break-words">{activeEvent.location}</span>
                   </p>
                 )}
@@ -1276,21 +1585,21 @@ export default function MoyaspovApp() {
                     setActiveEventId(null);
                     openEditModal(ev);
                   }}
-                  className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-300"
+                  className="p-2 rounded-xl bg-[var(--bg-input)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
                   title="Editar"
                 >
                   <Edit3 className="w-4 h-4" />
                 </button>
                 <button
                   onClick={() => handleDeleteEvent(activeEvent)}
-                  className="p-2 rounded-xl bg-white/5 hover:bg-red-500/20 text-zinc-400 hover:text-red-300"
+                  className="p-2 rounded-xl bg-[var(--bg-input)] hover:bg-red-500/20 text-[var(--text-secondary)] hover:text-red-400"
                   title="Eliminar"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
                 <button
                   onClick={() => setActiveEventId(null)}
-                  className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-400"
+                  className="p-2 rounded-xl bg-[var(--bg-input)] text-[var(--text-secondary)]"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -1298,34 +1607,34 @@ export default function MoyaspovApp() {
             </div>
 
             {activeEvent.description && (
-              <p className="text-xs text-zinc-300 bg-[#0d0d0d]/60 p-3 rounded-2xl border border-white/[0.05] break-words">
+              <p className="text-xs text-[var(--text-secondary)] bg-[var(--bg-input)] p-3 rounded-2xl border border-[var(--border-subtle)] break-words">
                 {activeEvent.description}
               </p>
             )}
 
             <div className="space-y-2.5">
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
                 Notas y Resumen ({activeEvent.event_notes?.length || 0})
               </h4>
 
               <div className="space-y-2 max-h-[180px] overflow-y-auto pr-1">
                 {!activeEvent.event_notes ||
                 activeEvent.event_notes.length === 0 ? (
-                  <p className="text-xs text-zinc-500 py-4 text-center border border-dashed border-white/10 rounded-2xl">
+                  <p className="text-xs text-[var(--text-muted)] py-4 text-center border border-dashed border-[var(--border-subtle)] rounded-2xl">
                     Sin notas todavía. Escribe un comentario abajo.
                   </p>
                 ) : (
                   activeEvent.event_notes.map((note) => (
                     <div
                       key={note.id}
-                      className="p-3 rounded-2xl bg-[#0d0d0d]/80 border border-white/[0.06] text-xs flex items-start justify-between gap-2"
+                      className="p-3 rounded-2xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-xs flex items-start justify-between gap-2"
                     >
-                      <p className="text-zinc-200 leading-relaxed break-words">
+                      <p className="text-[var(--text-primary)] leading-relaxed break-words">
                         {note.content}
                       </p>
                       <button
                         onClick={() => handleDeleteNote(note.id)}
-                        className="text-zinc-500 hover:text-red-400 p-1 shrink-0"
+                        className="text-[var(--text-muted)] hover:text-red-400 p-1 shrink-0"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -1343,12 +1652,12 @@ export default function MoyaspovApp() {
                   value={newNoteContent}
                   onChange={(e) => setNewNoteContent(e.target.value)}
                   placeholder="Agregar nota o comentario..."
-                  className="flex-1 rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-3.5 py-2.5 text-xs text-white outline-none"
+                  className="flex-1 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] focus:border-[var(--accent)] px-3.5 py-2.5 text-xs text-[var(--text-primary)] outline-none"
                 />
                 <button
                   type="submit"
                   disabled={savingNote || !newNoteContent.trim()}
-                  className="p-2.5 rounded-xl bg-[#D96299] hover:bg-[#e68ab5] disabled:opacity-50 text-[#0d0d0d] transition shrink-0"
+                  className="p-2.5 rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:opacity-50 text-[#0d0d0d] transition shrink-0"
                 >
                   <Send className="w-4 h-4" />
                 </button>
@@ -1361,23 +1670,23 @@ export default function MoyaspovApp() {
       {/* MODAL / BOTTOM SHEET DE TEXTO RÁPIDO NOTION */}
       {isNotionModalOpen && (
         <div
-          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
+          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
           onClick={() => setIsNotionModalOpen(false)}
         >
           <div
-            className="glass-panel border-t sm:border border-[#D96299]/40 rounded-t-3xl sm:rounded-3xl max-w-md w-full p-5 sm:p-6 pb-8 sm:pb-6 space-y-4"
+            className="glass-panel border-t sm:border border-[var(--border-subtle)] rounded-t-3xl sm:rounded-3xl max-w-md w-full p-5 sm:p-6 pb-8 sm:pb-6 space-y-4"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-[#D96299]" />
-                <h3 className="text-sm font-bold text-white">
+                <Sparkles className="w-4 h-4 text-[var(--accent)]" />
+                <h3 className="text-sm font-bold text-[var(--text-primary)]">
                   Agendar con Texto Rápido (Notion)
                 </h3>
               </div>
               <button
                 onClick={() => setIsNotionModalOpen(false)}
-                className="p-1.5 rounded-xl bg-white/5 text-zinc-400 hover:text-white"
+                className="p-1.5 rounded-xl bg-[var(--bg-input)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1390,15 +1699,15 @@ export default function MoyaspovApp() {
                 value={notionInput}
                 onChange={(e) => setNotionInput(e.target.value)}
                 placeholder='Ej: "Sesion jueves 29 oct 26 a las 8:00 pm"'
-                className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-3.5 py-3 text-sm text-white outline-none"
+                className="w-full rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] focus:border-[var(--accent)] px-3.5 py-3 text-sm text-[var(--text-primary)] outline-none"
               />
 
               {notionPreview && (
-                <div className="p-3 rounded-2xl bg-[#0d0d0d]/80 border border-[#D96299]/30 text-xs space-y-1">
-                  <p className="text-white font-semibold">
+                <div className="p-3 rounded-2xl bg-[var(--bg-input)] border border-[var(--accent)] text-xs space-y-1">
+                  <p className="text-[var(--text-primary)] font-semibold">
                     {notionPreview.title}
                   </p>
-                  <p className="text-[#D96299]">
+                  <p className="text-[var(--accent)]">
                     {formatReadableDate(
                       toLocalDateKey(notionPreview.startTime)
                     )}{" "}
@@ -1414,7 +1723,7 @@ export default function MoyaspovApp() {
               <button
                 type="submit"
                 disabled={parsingNotion || !notionInput.trim()}
-                className="w-full py-3 rounded-xl bg-[#D96299] hover:bg-[#e68ab5] disabled:opacity-50 text-[#0d0d0d] font-semibold text-xs transition"
+                className="w-full py-3 rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:opacity-50 text-[#0d0d0d] font-semibold text-xs transition"
               >
                 {parsingNotion ? "Agendando..." : "Agendar Cita"}
               </button>
@@ -1426,20 +1735,20 @@ export default function MoyaspovApp() {
       {/* MODAL / BOTTOM SHEET PARA CREAR / EDITAR CITA */}
       {isEventModalOpen && (
         <div
-          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
+          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
           onClick={() => setIsEventModalOpen(false)}
         >
           <div
-            className="glass-panel border-t sm:border border-[#D96299]/40 rounded-t-3xl sm:rounded-3xl max-w-md w-full p-5 sm:p-6 pb-8 sm:pb-6 space-y-4 max-h-[90dvh] overflow-y-auto"
+            className="glass-panel border-t sm:border border-[var(--border-subtle)] rounded-t-3xl sm:rounded-3xl max-w-md w-full p-5 sm:p-6 pb-8 sm:pb-6 space-y-4 max-h-[90dvh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold text-white">
+              <h3 className="text-base font-bold text-[var(--text-primary)]">
                 {editingEvent ? "Editar Cita" : "Nueva Cita"}
               </h3>
               <button
                 onClick={() => setIsEventModalOpen(false)}
-                className="p-1.5 rounded-xl bg-white/5 text-zinc-400 hover:text-white"
+                className="p-1.5 rounded-xl bg-[var(--bg-input)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1447,7 +1756,7 @@ export default function MoyaspovApp() {
 
             <form onSubmit={handleSaveEvent} className="space-y-3.5">
               <div>
-                <label className="block text-xs text-zinc-400 mb-1">
+                <label className="block text-xs text-[var(--text-secondary)] mb-1">
                   Título *
                 </label>
                 <input
@@ -1456,13 +1765,13 @@ export default function MoyaspovApp() {
                   value={formTitle}
                   onChange={(e) => setFormTitle(e.target.value)}
                   placeholder="Nombre de la sesión o cita"
-                  className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-3.5 py-2.5 text-sm text-white outline-none"
+                  className="w-full rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] focus:border-[var(--accent)] px-3.5 py-2.5 text-sm text-[var(--text-primary)] outline-none"
                 />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                 <div>
-                  <label className="block text-xs text-zinc-400 mb-1">
+                  <label className="block text-xs text-[var(--text-secondary)] mb-1">
                     Fecha
                   </label>
                   <input
@@ -1470,12 +1779,12 @@ export default function MoyaspovApp() {
                     required
                     value={formDate}
                     onChange={(e) => setFormDate(e.target.value)}
-                    className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-3 py-2 text-xs text-white outline-none"
+                    className="w-full rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] focus:border-[var(--accent)] px-3 py-2 text-xs text-[var(--text-primary)] outline-none"
                   />
                 </div>
                 <div className="grid grid-cols-2 sm:contents gap-2.5">
                   <div>
-                    <label className="block text-xs text-zinc-400 mb-1">
+                    <label className="block text-xs text-[var(--text-secondary)] mb-1">
                       Inicio
                     </label>
                     <input
@@ -1483,11 +1792,11 @@ export default function MoyaspovApp() {
                       required
                       value={formStartTime}
                       onChange={(e) => setFormStartTime(e.target.value)}
-                      className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-3 py-2 text-xs text-white outline-none"
+                      className="w-full rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] focus:border-[var(--accent)] px-3 py-2 text-xs text-[var(--text-primary)] outline-none"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-zinc-400 mb-1">
+                    <label className="block text-xs text-[var(--text-secondary)] mb-1">
                       Fin
                     </label>
                     <input
@@ -1495,14 +1804,14 @@ export default function MoyaspovApp() {
                       required
                       value={formEndTime}
                       onChange={(e) => setFormEndTime(e.target.value)}
-                      className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-3 py-2 text-xs text-white outline-none"
+                      className="w-full rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] focus:border-[var(--accent)] px-3 py-2 text-xs text-[var(--text-primary)] outline-none"
                     />
                   </div>
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs text-zinc-400 mb-1">
+                <label className="block text-xs text-[var(--text-secondary)] mb-1">
                   Lugar / Enlace
                 </label>
                 <input
@@ -1510,13 +1819,13 @@ export default function MoyaspovApp() {
                   value={formLocation}
                   onChange={(e) => setFormLocation(e.target.value)}
                   placeholder="Opcional"
-                  className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-3.5 py-2 text-xs text-white outline-none"
+                  className="w-full rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] focus:border-[var(--accent)] px-3.5 py-2 text-xs text-[var(--text-primary)] outline-none"
                 />
               </div>
 
               {!editingEvent && (
                 <div>
-                  <label className="block text-xs text-zinc-400 mb-1">
+                  <label className="block text-xs text-[var(--text-secondary)] mb-1">
                     Nota o comentario
                   </label>
                   <input
@@ -1524,7 +1833,7 @@ export default function MoyaspovApp() {
                     value={formInitialNote}
                     onChange={(e) => setFormInitialNote(e.target.value)}
                     placeholder="Opcional"
-                    className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-3.5 py-2 text-xs text-white outline-none"
+                    className="w-full rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] focus:border-[var(--accent)] px-3.5 py-2 text-xs text-[var(--text-primary)] outline-none"
                   />
                 </div>
               )}
@@ -1533,14 +1842,14 @@ export default function MoyaspovApp() {
                 <button
                   type="button"
                   onClick={() => setIsEventModalOpen(false)}
-                  className="px-4 py-2.5 rounded-xl bg-white/5 text-xs text-zinc-300"
+                  className="px-4 py-2.5 rounded-xl bg-[var(--bg-input)] text-xs text-[var(--text-secondary)]"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={savingEvent}
-                  className="px-5 py-2.5 rounded-xl bg-[#D96299] hover:bg-[#e68ab5] text-[#0d0d0d] font-semibold text-xs transition"
+                  className="px-5 py-2.5 rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[#0d0d0d] font-semibold text-xs transition"
                 >
                   {savingEvent ? "Guardando..." : "Guardar"}
                 </button>
@@ -1553,18 +1862,18 @@ export default function MoyaspovApp() {
       {/* MODAL DE CUENTA / PERFIL / LOGIN */}
       {isAuthModalOpen && (
         <div
-          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
+          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
           onClick={() => setIsAuthModalOpen(false)}
         >
           <div
-            className="glass-panel border-t sm:border border-[#D96299]/40 rounded-t-3xl sm:rounded-3xl max-w-sm w-full p-5 sm:p-6 pb-8 sm:pb-6 space-y-5"
+            className="glass-panel border-t sm:border border-[var(--border-subtle)] rounded-t-3xl sm:rounded-3xl max-w-sm w-full p-5 sm:p-6 pb-8 sm:pb-6 space-y-5"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
               <MoyaspovLogo size={36} />
               <button
                 onClick={() => setIsAuthModalOpen(false)}
-                className="p-1.5 rounded-xl bg-white/5 text-zinc-400 hover:text-white"
+                className="p-1.5 rounded-xl bg-[var(--bg-input)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1572,8 +1881,8 @@ export default function MoyaspovApp() {
 
             {currentUserEmail ? (
               <div className="space-y-4">
-                <div className="flex items-center gap-3.5 p-3.5 rounded-2xl bg-[#0d0d0d]/80 border border-white/[0.06]">
-                  <div className="h-12 w-12 rounded-full bg-[#181426] border border-[#D96299]/50 p-0.5 flex items-center justify-center overflow-hidden shrink-0">
+                <div className="flex items-center gap-3.5 p-3.5 rounded-2xl bg-[var(--bg-input)] border border-[var(--border-subtle)]">
+                  <div className="h-12 w-12 rounded-full bg-[var(--bg-secondary)] border border-[var(--accent)] p-0.5 flex items-center justify-center overflow-hidden shrink-0">
                     {userAvatarUrl && !avatarError ? (
                       <img
                         src={userAvatarUrl}
@@ -1583,18 +1892,18 @@ export default function MoyaspovApp() {
                         className="h-full w-full rounded-full object-cover"
                       />
                     ) : (
-                      <span className="text-base font-semibold text-[#D96299] uppercase">
+                      <span className="text-base font-semibold text-[var(--accent)] uppercase">
                         {userInitial}
                       </span>
                     )}
                   </div>
                   <div className="min-w-0">
                     {userDisplayName && (
-                      <p className="text-sm font-bold text-white truncate">
+                      <p className="text-sm font-bold text-[var(--text-primary)] truncate">
                         {userDisplayName}
                       </p>
                     )}
-                    <p className="text-xs text-zinc-400 truncate">
+                    <p className="text-xs text-[var(--text-secondary)] truncate">
                       {currentUserEmail}
                     </p>
                   </div>
@@ -1603,7 +1912,7 @@ export default function MoyaspovApp() {
                 <button
                   type="button"
                   onClick={handleSignOut}
-                  className="w-full py-2.5 rounded-xl bg-white/5 hover:bg-red-500/20 text-xs text-zinc-300 hover:text-red-300 flex items-center justify-center gap-2 transition"
+                  className="w-full py-2.5 rounded-xl bg-[var(--bg-input)] hover:bg-red-500/20 text-xs text-[var(--text-secondary)] hover:text-red-400 flex items-center justify-center gap-2 transition"
                 >
                   <LogOut className="w-4 h-4" />
                   <span>Cerrar sesión</span>
@@ -1612,12 +1921,12 @@ export default function MoyaspovApp() {
             ) : (
               <>
                 <div>
-                  <h3 className="text-base font-bold text-white">
+                  <h3 className="text-base font-bold text-[var(--text-primary)]">
                     {authMode === "login"
                       ? "Ingresa a tu cuenta"
                       : "Crear una cuenta"}
                   </h3>
-                  <p className="text-xs text-zinc-400 mt-0.5">
+                  <p className="text-xs text-[var(--text-secondary)] mt-0.5">
                     Accede con Google o con tu correo electrónico.
                   </p>
                 </div>
@@ -1626,17 +1935,17 @@ export default function MoyaspovApp() {
                   type="button"
                   onClick={handleGoogleOAuth}
                   disabled={authLoading}
-                  className="w-full py-3 rounded-xl bg-[#D96299] hover:bg-[#e68ab5] text-[#0d0d0d] font-semibold text-xs flex items-center justify-center gap-2 transition shadow-lg shadow-[#D96299]/20"
+                  className="w-full py-3 rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[#0d0d0d] font-semibold text-xs flex items-center justify-center gap-2 transition shadow-lg"
                 >
                   <span>Continuar con Google</span>
                 </button>
 
                 <div className="relative flex py-1 items-center">
-                  <div className="flex-grow border-t border-white/[0.07]" />
-                  <span className="flex-shrink mx-3 text-[11px] text-zinc-500">
+                  <div className="flex-grow border-t border-[var(--border-subtle)]" />
+                  <span className="flex-shrink mx-3 text-[11px] text-[var(--text-muted)]">
                     o con correo
                   </span>
-                  <div className="flex-grow border-t border-white/[0.07]" />
+                  <div className="flex-grow border-t border-[var(--border-subtle)]" />
                 </div>
 
                 <form onSubmit={handleEmailAuth} className="space-y-3">
@@ -1647,7 +1956,7 @@ export default function MoyaspovApp() {
                       value={authName}
                       onChange={(e) => setAuthName(e.target.value)}
                       placeholder="Tu nombre"
-                      className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-3.5 py-2.5 text-xs text-white outline-none"
+                      className="w-full rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] focus:border-[var(--accent)] px-3.5 py-2.5 text-xs text-[var(--text-primary)] outline-none"
                     />
                   )}
                   <input
@@ -1656,7 +1965,7 @@ export default function MoyaspovApp() {
                     value={authEmail}
                     onChange={(e) => setAuthEmail(e.target.value)}
                     placeholder="Correo electrónico"
-                    className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-3.5 py-2.5 text-xs text-white outline-none"
+                    className="w-full rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] focus:border-[var(--accent)] px-3.5 py-2.5 text-xs text-[var(--text-primary)] outline-none"
                   />
                   <input
                     type="password"
@@ -1664,13 +1973,13 @@ export default function MoyaspovApp() {
                     value={authPassword}
                     onChange={(e) => setAuthPassword(e.target.value)}
                     placeholder="Contraseña"
-                    className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-3.5 py-2.5 text-xs text-white outline-none"
+                    className="w-full rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] focus:border-[var(--accent)] px-3.5 py-2.5 text-xs text-[var(--text-primary)] outline-none"
                   />
 
                   <button
                     type="submit"
                     disabled={authLoading}
-                    className="w-full py-2.5 rounded-xl bg-[#181426] hover:bg-white/10 border border-white/10 text-xs text-zinc-200 font-medium transition"
+                    className="w-full py-2.5 rounded-xl bg-[var(--bg-secondary)] hover:opacity-90 border border-[var(--border-subtle)] text-xs text-[var(--text-primary)] font-medium transition"
                   >
                     {authLoading
                       ? "Procesando..."
@@ -1680,14 +1989,14 @@ export default function MoyaspovApp() {
                   </button>
                 </form>
 
-                <p className="text-center text-xs text-zinc-400">
+                <p className="text-center text-xs text-[var(--text-secondary)]">
                   {authMode === "login" ? (
                     <>
                       ¿No tienes cuenta?{" "}
                       <button
                         type="button"
                         onClick={() => setAuthMode("register")}
-                        className="text-[#D96299] hover:underline font-medium"
+                        className="text-[var(--accent)] hover:underline font-medium"
                       >
                         Regístrate
                       </button>
@@ -1698,7 +2007,7 @@ export default function MoyaspovApp() {
                       <button
                         type="button"
                         onClick={() => setAuthMode("login")}
-                        className="text-[#D96299] hover:underline font-medium"
+                        className="text-[var(--accent)] hover:underline font-medium"
                       >
                         Inicia sesión
                       </button>

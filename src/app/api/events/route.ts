@@ -9,22 +9,20 @@ import { isSupabaseServerConfigured } from "@/lib/supabase/server";
 export async function GET(request: NextRequest) {
   try {
     if (!isSupabaseServerConfigured()) {
-      return NextResponse.json(
-        {
-          configured: false,
-          events: [],
-          message:
-            "Supabase aún no está configurado en .env.local. Ejecuta el script SQL y agrega tus credenciales.",
-        },
-        { status: 200 }
-      );
+      return NextResponse.json({ configured: false, events: [] });
     }
 
     const { searchParams } = new URL(request.url);
+    const userId = searchParams.get("userId");
+
+    // Si no hay un usuario autenticado, devolver la agenda completamente vacía
+    if (!userId) {
+      return NextResponse.json({ configured: true, events: [] });
+    }
+
     const date = searchParams.get("date");
     const startDate = searchParams.get("startDate");
     const endDate = searchParams.get("endDate");
-    const userId = searchParams.get("userId") || undefined;
 
     if (date) {
       const events = await getDailyAgenda(date, userId);
@@ -64,6 +62,12 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
+    if (!body.user_id) {
+      return NextResponse.json(
+        { error: "Debes iniciar sesión para crear una cita" },
+        { status: 401 }
+      );
+    }
     const created = await createEvent(body);
     return NextResponse.json({ event: created }, { status: 201 });
   } catch (error) {

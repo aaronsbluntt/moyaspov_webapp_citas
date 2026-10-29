@@ -15,7 +15,7 @@ export function MoyaspovLogo({ className = "", size = 38 }: MoyaspovLogoProps) {
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
-      aria-label="moyaspov logo"
+      aria-label="logo"
     >
       <defs>
         <linearGradient
@@ -25,9 +25,9 @@ export function MoyaspovLogo({ className = "", size = 38 }: MoyaspovLogoProps) {
           x2="100%"
           y2="100%"
         >
-          <stop offset="0%" stopColor="#F5A3C7" />
-          <stop offset="50%" stopColor="#D96299" />
-          <stop offset="100%" stopColor="#9E3B6B" />
+          <stop offset="0%" stopColor="var(--accent-hover, #F5A3C7)" />
+          <stop offset="55%" stopColor="var(--accent, #D96299)" />
+          <stop offset="100%" stopColor="var(--accent, #9E3B6B)" />
         </linearGradient>
       </defs>
       <path
