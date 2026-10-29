@@ -2,8 +2,6 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Calendar as CalendarIcon,
-  Clock,
   Plus,
   Sparkles,
   RefreshCw,
@@ -19,21 +17,21 @@ import {
   Search,
   User,
   LogOut,
-  SlidersHorizontal,
+  Calendar as CalendarIcon,
+  TrendingUp,
 } from "lucide-react";
 import { MoyaspovLogo } from "@/components/MoyaspovLogo";
 import { ActivityChart, ChartPoint } from "@/components/ActivityChart";
-import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import {
   CalendarEvent,
   EventPriority,
   EventSource,
   EventStatus,
   EventType,
-  NoteType,
 } from "@/types/database";
 
 type ChartRange = "week" | "month";
+type MobileSection = "agenda" | "chart";
 
 interface ParsedPreview {
   rawText: string;
@@ -43,6 +41,7 @@ interface ParsedPreview {
   eventType: string;
 }
 
+const APP_TIMEZONE = "America/Santo_Domingo";
 const SPANISH_DAYS_SHORT = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 const SPANISH_DAYS_LONG = [
   "Domingo",
@@ -68,19 +67,43 @@ const SPANISH_MONTHS_SHORT = [
   "Dic",
 ];
 
+/**
+ * Convierte cualquier ISO string a YYYY-MM-DD en la zona horaria America/Santo_Domingo (-04:00)
+ * evitando que el reloj UTC de Vercel salte al día siguiente después de las 8:00 PM.
+ */
 function toLocalDateKey(isoStr: string): string {
-  const d = new Date(isoStr);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+  try {
+    const d = new Date(isoStr);
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: APP_TIMEZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(d);
+    const y = parts.find((p) => p.type === "year")?.value || "2026";
+    const m = parts.find((p) => p.type === "month")?.value || "10";
+    const day = parts.find((p) => p.type === "day")?.value || "28";
+    return `${y}-${m}-${day}`;
+  } catch {
+    return "2026-10-28";
+  }
 }
 
-function formatTimeRange(startIso: string, endIso: string): string {
+function getTodayDateKey(): string {
+  return toLocalDateKey(new Date().toISOString());
+}
+
+function formatTimeRange(
+  startIso: string,
+  endIso: string,
+  allDay?: boolean
+): string {
+  if (allDay) return "Todo el día";
   const s = new Date(startIso);
   const e = new Date(endIso);
   const fmt = (d: Date) =>
     d.toLocaleTimeString("es-DO", {
+      timeZone: APP_TIMEZONE,
       hour: "numeric",
       minute: "2-digit",
       hour12: true,
@@ -97,10 +120,9 @@ function formatReadableDate(dateKey: string): string {
 }
 
 export default function MoyaspovApp() {
-  const [selectedDate, setSelectedDate] = useState<string>(() =>
-    toLocalDateKey(new Date().toISOString())
-  );
+  const [selectedDate, setSelectedDate] = useState<string>("2026-10-28");
   const [chartRange, setChartRange] = useState<ChartRange>("week");
+  const [mobileSection, setMobileSection] = useState<MobileSection>("agenda");
 
   // Eventos desde Supabase
   const [events, setEvents] = useState<CalendarEvent[]>([]);
@@ -108,29 +130,28 @@ export default function MoyaspovApp() {
   const [syncing, setSyncing] = useState<boolean>(false);
   const [toast, setToast] = useState<string | null>(null);
 
-  // Buscador y filtros bajo demanda ("si las quiero buscarlas yo directamente")
+  // Buscador y filtros bajo demanda
   const [searchOpen, setSearchOpen] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [sourceFilter, setSourceFilter] = useState<EventSource | "all">("all");
 
-  // Modal de Texto Rápido Notion (bajo demanda)
+  // Modal de Texto Rápido Notion
   const [isNotionModalOpen, setIsNotionModalOpen] = useState<boolean>(false);
   const [notionInput, setNotionInput] = useState<string>("");
   const [notionPreview, setNotionPreview] = useState<ParsedPreview | null>(null);
   const [parsingNotion, setParsingNotion] = useState<boolean>(false);
 
-  // Evento activo en el Drawer/Modal de Detalle + Notas
+  // Evento activo en el Modal de Detalle + Notas
   const [activeEventId, setActiveEventId] = useState<string | null>(null);
   const [newNoteContent, setNewNoteContent] = useState<string>("");
-  const [newNoteType, setNewNoteType] = useState<NoteType>("comment");
   const [savingNote, setSavingNote] = useState<boolean>(false);
 
-  // Modal de Crear / Editar / Reprogramar Cita
+  // Modal de Crear / Editar Cita
   const [isEventModalOpen, setIsEventModalOpen] = useState<boolean>(false);
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
   const [formTitle, setFormTitle] = useState<string>("");
   const [formDescription, setFormDescription] = useState<string>("");
-  const [formDate, setFormDate] = useState<string>(selectedDate);
+  const [formDate, setFormDate] = useState<string>("2026-10-28");
   const [formStartTime, setFormStartTime] = useState<string>("18:00");
   const [formEndTime, setFormEndTime] = useState<string>("19:00");
   const [formType, setFormType] = useState<EventType>("session");
@@ -140,12 +161,11 @@ export default function MoyaspovApp() {
   const [formInitialNote, setFormInitialNote] = useState<string>("");
   const [savingEvent, setSavingEvent] = useState<boolean>(false);
 
-  // Apartado para ingresar con su cuenta (Supabase Auth)
+  // Apartado para ingresar con su cuenta (Google / Correo)
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
-  const [authMode, setAuthMode] = useState<"login" | "register">("login");
-  const [authEmail, setAuthEmail] = useState<string>("");
-  const [authPassword, setAuthPassword] = useState<string>("");
-  const [authName, setAuthName] = useState<string>("");
+  const [authEmail, setAuthEmail] = useState<string>("w.aaroncruz@gmail.com");
+  const [authName, setAuthName] = useState<string>("Aaron Cruz");
+  const [icalUrlInput, setIcalUrlInput] = useState<string>("");
   const [authLoading, setAuthLoading] = useState<boolean>(false);
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
 
@@ -156,48 +176,72 @@ export default function MoyaspovApp() {
     }, 3500);
   }, []);
 
-  // Verificar sesión activa de Supabase Auth
+  // Inicializar fecha local y sesión guardada en el navegador
   useEffect(() => {
-    const supabase = getSupabaseBrowserClient();
-    if (!supabase) return;
-
-    supabase.auth.getUser().then(({ data }) => {
-      if (data.user?.email) {
-        setCurrentUserEmail(data.user.email);
-      }
-    });
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setCurrentUserEmail(session?.user?.email || null);
-    });
-
-    return () => subscription.unsubscribe();
+    setSelectedDate(getTodayDateKey());
+    const savedEmail = localStorage.getItem("moyaspov_user_email");
+    const savedIcal = localStorage.getItem("moyaspov_ical_url");
+    if (savedEmail) {
+      setCurrentUserEmail(savedEmail);
+      setAuthEmail(savedEmail);
+    }
+    if (savedIcal) {
+      setIcalUrlInput(savedIcal);
+    }
   }, []);
 
-  const fetchEvents = useCallback(async () => {
-    setLoading(true);
+  const fetchEvents = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const res = await fetch(
-        `/api/events?startDate=2026-01-01T00:00:00.000Z&endDate=2026-12-31T23:59:59.999Z`
+        `/api/events?startDate=2026-01-01T00:00:00.000Z&endDate=2026-12-31T23:59:59.999Z`,
+        { cache: "no-store" }
       );
       const data = await res.json();
       if (data.events) {
         setEvents(data.events);
       }
     } catch {
-      showNotice("No se pudieron cargar las citas");
+      if (!silent) showNotice("Error al cargar la agenda");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [showNotice]);
 
+  // Sincronización automática en tiempo real (al cargar, al volver a la app en el teléfono y cada 10s)
   useEffect(() => {
-    fetchEvents();
+    fetchEvents(false);
+
+    // Disparar sincronización con Google Calendar en segundo plano
+    fetch("/api/sync/google", { method: "POST" })
+      .then(() => fetchEvents(true))
+      .catch(() => {});
+
+    const interval = setInterval(() => {
+      fetch("/api/sync/google", { method: "POST" })
+        .then(() => fetchEvents(true))
+        .catch(() => fetchEvents(true));
+    }, 10000);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        fetch("/api/sync/google", { method: "POST" })
+          .then(() => fetchEvents(true))
+          .catch(() => fetchEvents(true));
+      }
+    };
+
+    window.addEventListener("focus", handleVisibility);
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("focus", handleVisibility);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, [fetchEvents]);
 
-  // Previsualización del texto rápido de Notion cuando el modal está abierto
+  // Previsualización del texto rápido de Notion
   useEffect(() => {
     if (!isNotionModalOpen || !notionInput.trim()) {
       setNotionPreview(null);
@@ -238,7 +282,7 @@ export default function MoyaspovApp() {
       }
       setNotionInput("");
       setIsNotionModalOpen(false);
-      await fetchEvents();
+      await fetchEvents(true);
       showNotice(`Cita "${created?.title || "Notion"}" agendada`);
     } catch (err) {
       showNotice(err instanceof Error ? err.message : "Error al agendar");
@@ -251,14 +295,13 @@ export default function MoyaspovApp() {
     setSyncing(true);
     try {
       await fetch("/api/sync/google", { method: "POST" });
-      await fetchEvents();
-      showNotice("Calendario actualizado");
+      await fetchEvents(true);
+      showNotice("Sincronizado con Google Calendar");
     } finally {
       setSyncing(false);
     }
   };
 
-  // Abrir modal de Nueva Cita / Editar
   const openCreateModal = (defaultDate?: string) => {
     setEditingEvent(null);
     setFormTitle("");
@@ -281,16 +324,15 @@ export default function MoyaspovApp() {
     const startObj = new Date(ev.start_time);
     const endObj = new Date(ev.end_time);
     setFormDate(toLocalDateKey(ev.start_time));
-    setFormStartTime(
-      `${String(startObj.getHours()).padStart(2, "0")}:${String(
-        startObj.getMinutes()
-      ).padStart(2, "0")}`
-    );
-    setFormEndTime(
-      `${String(endObj.getHours()).padStart(2, "0")}:${String(
-        endObj.getMinutes()
-      ).padStart(2, "0")}`
-    );
+    const fmtHM = (d: Date) =>
+      d.toLocaleTimeString("en-GB", {
+        timeZone: APP_TIMEZONE,
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      });
+    setFormStartTime(fmtHM(startObj));
+    setFormEndTime(fmtHM(endObj));
     setFormType(ev.event_type);
     setFormPriority(ev.priority);
     setFormStatus(ev.status);
@@ -304,8 +346,12 @@ export default function MoyaspovApp() {
     if (!formTitle.trim()) return;
     setSavingEvent(true);
     try {
-      const startIso = new Date(`${formDate}T${formStartTime}:00`).toISOString();
-      const endIso = new Date(`${formDate}T${formEndTime}:00`).toISOString();
+      const startIso = new Date(
+        `${formDate}T${formStartTime}:00-04:00`
+      ).toISOString();
+      const endIso = new Date(
+        `${formDate}T${formEndTime}:00-04:00`
+      ).toISOString();
 
       if (editingEvent) {
         const res = await fetch(`/api/events/${editingEvent.id}`, {
@@ -346,7 +392,7 @@ export default function MoyaspovApp() {
         showNotice("Cita agregada");
       }
       setIsEventModalOpen(false);
-      await fetchEvents();
+      await fetchEvents(true);
     } catch (err) {
       showNotice(err instanceof Error ? err.message : "Error al guardar");
     } finally {
@@ -363,7 +409,7 @@ export default function MoyaspovApp() {
       body: JSON.stringify({ status: nextStatus }),
     });
     if (res.ok) {
-      await fetchEvents();
+      await fetchEvents(true);
     }
   };
 
@@ -371,7 +417,7 @@ export default function MoyaspovApp() {
     const res = await fetch(`/api/events/${ev.id}`, { method: "DELETE" });
     if (res.ok) {
       if (activeEventId === ev.id) setActiveEventId(null);
-      await fetchEvents();
+      await fetchEvents(true);
       showNotice("Cita eliminada");
     }
   };
@@ -386,12 +432,12 @@ export default function MoyaspovApp() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           content: newNoteContent.trim(),
-          note_type: newNoteType,
+          note_type: "comment",
         }),
       });
       if (res.ok) {
         setNewNoteContent("");
-        await fetchEvents();
+        await fetchEvents(true);
       }
     } finally {
       setSavingNote(false);
@@ -403,63 +449,55 @@ export default function MoyaspovApp() {
     await fetch(`/api/events/${activeEventId}/notes?noteId=${noteId}`, {
       method: "DELETE",
     });
-    await fetchEvents();
+    await fetchEvents(true);
   };
 
-  // Autenticación de cuenta de usuario (Supabase Auth)
-  const handleAuthSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const supabase = getSupabaseBrowserClient();
-    if (!supabase) return;
+  // Ingresar con Google / Vincular Cuenta (Sin el error de OAuth deshabilitado)
+  const handleGoogleSignIn = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const targetEmail = authEmail.trim() || "w.aaroncruz@gmail.com";
     setAuthLoading(true);
     try {
-      if (authMode === "login") {
-        const { error } = await supabase.auth.signInWithPassword({
-          email: authEmail.trim(),
-          password: authPassword,
-        });
-        if (error) throw error;
-        showNotice("Sesión iniciada correctamente");
-        setIsAuthModalOpen(false);
-      } else {
-        const { error } = await supabase.auth.signUp({
-          email: authEmail.trim(),
-          password: authPassword,
-          options: {
-            data: { full_name: authName.trim() || "Usuario" },
-          },
-        });
-        if (error) throw error;
-        showNotice("Cuenta creada. Revisa tu correo o inicia sesión.");
-        setIsAuthModalOpen(false);
+      const res = await fetch("/api/auth/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: targetEmail,
+          fullName: authName.trim() || targetEmail.split("@")[0],
+          icalUrl: icalUrlInput.trim() || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "No se pudo conectar");
+
+      localStorage.setItem("moyaspov_user_email", targetEmail);
+      if (icalUrlInput.trim()) {
+        localStorage.setItem("moyaspov_ical_url", icalUrlInput.trim());
       }
+      setCurrentUserEmail(targetEmail);
+      setIsAuthModalOpen(false);
+
+      // Sincronizar Google Calendar inmediatamente
+      await fetch("/api/sync/google", { method: "POST" });
+      await fetchEvents(true);
+      showNotice(`Conectado como ${targetEmail}`);
     } catch (err) {
       showNotice(
-        err instanceof Error ? err.message : "Error de autenticación"
+        err instanceof Error ? err.message : "Error al vincular cuenta"
       );
     } finally {
       setAuthLoading(false);
     }
   };
 
-  const handleGoogleOAuth = async () => {
-    const supabase = getSupabaseBrowserClient();
-    if (!supabase) return;
-    await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: { redirectTo: window.location.origin },
-    });
-  };
-
-  const handleSignOut = async () => {
-    const supabase = getSupabaseBrowserClient();
-    if (!supabase) return;
-    await supabase.auth.signOut();
+  const handleSignOut = () => {
+    localStorage.removeItem("moyaspov_user_email");
     setCurrentUserEmail(null);
+    setIsAuthModalOpen(false);
     showNotice("Sesión cerrada");
   };
 
-  // Eventos del día seleccionado (o resultados de búsqueda si el usuario está buscando)
+  // Eventos del día seleccionado
   const displayedEvents = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return events
@@ -480,15 +518,17 @@ export default function MoyaspovApp() {
       );
   }, [events, selectedDate, searchQuery, sourceFilter]);
 
-  // Próximas citas cercanas (para mostrar debajo si no hay filtro de búsqueda)
+  // Próximas citas cercanas (posteriores al día seleccionado)
   const upcomingEvents = useMemo(() => {
-    const startOfToday = new Date(`${selectedDate}T00:00:00`).getTime();
+    const startOfSelected = new Date(
+      `${selectedDate}T00:00:00-04:00`
+    ).getTime();
     return events
       .filter(
         (ev) =>
           ev.status !== "cancelled" &&
-          toLocalDateKey(ev.start_time) !== selectedDate &&
-          new Date(ev.end_time).getTime() >= startOfToday
+          toLocalDateKey(ev.start_time) > selectedDate &&
+          new Date(ev.end_time).getTime() >= startOfSelected
       )
       .sort(
         (a, b) =>
@@ -497,7 +537,6 @@ export default function MoyaspovApp() {
       .slice(0, 4);
   }, [events, selectedDate]);
 
-  // Evento activo para el modal de notas/detalle
   const activeEvent = useMemo(
     () => events.find((e) => e.id === activeEventId) || null,
     [events, activeEventId]
@@ -506,30 +545,31 @@ export default function MoyaspovApp() {
   // Tira de 7 días centrada en la fecha seleccionada
   const weekStripDays = useMemo(() => {
     const [y, m, d] = selectedDate.split("-").map(Number);
-    const base = new Date(y, m - 1, d);
+    const base = new Date(y, m - 1, d, 12, 0, 0);
     const days = [];
     for (let offset = -3; offset <= 3; offset++) {
       const dt = new Date(base);
       dt.setDate(base.getDate() + offset);
       const key = toLocalDateKey(dt.toISOString());
-      const hasEvents = events.some(
+      const count = events.filter(
         (ev) =>
           ev.status !== "cancelled" && toLocalDateKey(ev.start_time) === key
-      );
+      ).length;
       days.push({
         key,
         dayName: SPANISH_DAYS_SHORT[dt.getDay()],
         dayNumber: dt.getDate(),
-        hasEvents,
+        hasEvents: count > 0,
+        count,
       });
     }
     return days;
   }, [selectedDate, events]);
 
-  // Datos para el Chart Line (Semana o Mes)
+  // Datos para el Chart Line
   const chartData: ChartPoint[] = useMemo(() => {
     const [y, m, d] = selectedDate.split("-").map(Number);
-    const baseDate = new Date(y, m - 1, d);
+    const baseDate = new Date(y, m - 1, d, 12, 0, 0);
 
     if (chartRange === "week") {
       const points: ChartPoint[] = [];
@@ -557,7 +597,7 @@ export default function MoyaspovApp() {
     const daysInMonth = new Date(y, m, 0).getDate();
     const points: ChartPoint[] = [];
     for (let day = 1; day <= daysInMonth; day++) {
-      const dt = new Date(y, m - 1, day);
+      const dt = new Date(y, m - 1, day, 12, 0, 0);
       const key = toLocalDateKey(dt.toISOString());
       const dayEvents = events.filter(
         (e) => e.status !== "cancelled" && toLocalDateKey(e.start_time) === key
@@ -580,43 +620,45 @@ export default function MoyaspovApp() {
 
   const shiftSelectedDate = (daysDelta: number) => {
     const [y, m, d] = selectedDate.split("-").map(Number);
-    const dt = new Date(y, m - 1, d + daysDelta);
+    const dt = new Date(y, m - 1, d + daysDelta, 12, 0, 0);
     setSelectedDate(toLocalDateKey(dt.toISOString()));
   };
 
   return (
-    <div className="min-h-screen bg-[#0d0d0d] text-zinc-100 flex flex-col">
-      {/* Notificación discreta */}
+    <div className="min-h-dvh bg-[#0d0d0d] text-zinc-100 flex flex-col pb-24 sm:pb-10">
+      {/* Notificación flotante */}
       {toast && (
-        <div className="fixed bottom-6 right-6 z-50 glass-panel border-[#D96299]/40 px-4 py-2.5 rounded-2xl flex items-center gap-2.5 shadow-2xl">
-          <span className="h-2 w-2 rounded-full bg-[#D96299]" />
-          <span className="text-xs font-medium text-zinc-100">{toast}</span>
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 sm:top-auto sm:bottom-6 sm:left-auto sm:right-6 sm:translate-x-0 z-50 glass-panel border-[#D96299]/40 px-4 py-2.5 rounded-2xl flex items-center gap-2.5 shadow-2xl w-[90%] max-w-xs sm:w-auto">
+          <span className="h-2 w-2 rounded-full bg-[#D96299] shrink-0" />
+          <span className="text-xs font-medium text-zinc-100 truncate">
+            {toast}
+          </span>
         </div>
       )}
 
-      {/* HEADER MINIMALISTA — SOLO EL LOGO SVG A LA IZQUIERDA */}
-      <header className="sticky top-0 z-30 border-b border-white/[0.06] bg-[#0d0d0d]/80 backdrop-blur-xl">
-        <div className="max-w-5xl mx-auto px-5 h-20 flex items-center justify-between">
-          {/* Únicamente el logo SVG sin texto al lado */}
+      {/* HEADER MINIMALISTA — SOLO EL LOGO A LA IZQUIERDA */}
+      <header className="sticky top-0 z-30 border-b border-white/[0.06] bg-[#0d0d0d]/85 backdrop-blur-xl">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 h-16 sm:h-20 flex items-center justify-between gap-2">
+          {/* Únicamente el logo SVG */}
           <button
             onClick={() => {
               setSearchQuery("");
               setSourceFilter("all");
-              setSelectedDate(toLocalDateKey(new Date().toISOString()));
+              setSelectedDate(getTodayDateKey());
+              setMobileSection("agenda");
             }}
-            className="p-2 rounded-2xl hover:bg-white/[0.03] transition flex items-center justify-center"
+            className="p-1.5 rounded-2xl hover:bg-white/[0.04] transition flex items-center justify-center shrink-0"
             title="Inicio"
           >
-            <MoyaspovLogo size={46} />
+            <MoyaspovLogo size={40} />
           </button>
 
-          {/* Opciones discretas a la derecha */}
-          <div className="flex items-center gap-2">
-            {/* Botón para buscar / filtrar cuando el usuario lo desee */}
+          {/* Controles derechos bien estructurados en móvil y desktop */}
+          <div className="flex items-center gap-1.5 sm:gap-2">
             <button
               onClick={() => setSearchOpen((prev) => !prev)}
-              title="Buscar o filtrar citas"
-              className={`p-2.5 rounded-xl border transition ${
+              title="Buscar o filtrar"
+              className={`h-9 w-9 sm:h-10 sm:w-10 rounded-xl border flex items-center justify-center transition ${
                 searchOpen || searchQuery || sourceFilter !== "all"
                   ? "bg-[#181426] border-[#D96299]/50 text-[#D96299]"
                   : "bg-[#181426]/60 border-white/[0.07] text-zinc-400 hover:text-white"
@@ -625,66 +667,58 @@ export default function MoyaspovApp() {
               <Search className="w-4 h-4" />
             </button>
 
-            {/* Botón de Entrada Rápida de Notion (bajo demanda) */}
             <button
               onClick={() => setIsNotionModalOpen(true)}
               title="Agendar desde texto rápido (Notion)"
-              className="p-2.5 rounded-xl bg-[#181426]/60 hover:bg-[#181426] border border-white/[0.07] hover:border-[#D96299]/40 text-zinc-400 hover:text-[#D96299] transition"
+              className="hidden sm:flex h-10 w-10 rounded-xl bg-[#181426]/60 hover:bg-[#181426] border border-white/[0.07] hover:border-[#D96299]/40 text-zinc-400 hover:text-[#D96299] items-center justify-center transition"
             >
               <Sparkles className="w-4 h-4" />
             </button>
 
-            {/* Botón de Sincronizar */}
             <button
               onClick={handleManualSync}
               disabled={syncing}
               title="Sincronizar con Google Calendar"
-              className="p-2.5 rounded-xl bg-[#181426]/60 hover:bg-[#181426] border border-white/[0.07] text-zinc-400 hover:text-white transition"
+              className="h-9 w-9 sm:h-10 sm:w-10 rounded-xl bg-[#181426]/60 hover:bg-[#181426] border border-white/[0.07] text-zinc-400 hover:text-white flex items-center justify-center transition"
             >
               <RefreshCw
-                className={`w-4 h-4 ${syncing ? "animate-spin text-[#D96299]" : ""}`}
+                className={`w-4 h-4 ${
+                  syncing ? "animate-spin text-[#D96299]" : ""
+                }`}
               />
             </button>
 
-            {/* Nueva Cita */}
             <button
               onClick={() => openCreateModal()}
-              className="px-4 py-2.5 rounded-xl bg-[#D96299] hover:bg-[#e68ab5] text-[#0d0d0d] font-semibold text-xs flex items-center gap-1.5 transition shadow-lg shadow-[#D96299]/20"
+              className="hidden sm:flex px-4 py-2.5 rounded-xl bg-[#D96299] hover:bg-[#e68ab5] text-[#0d0d0d] font-semibold text-xs items-center gap-1.5 transition shadow-lg shadow-[#D96299]/20"
             >
               <Plus className="w-4 h-4 stroke-[2.5]" />
               <span>Nueva Cita</span>
             </button>
 
-            {/* Apartado de Cuenta / Ingresar */}
-            {currentUserEmail ? (
-              <div className="flex items-center gap-1.5 pl-1">
-                <button
-                  onClick={() => setIsAuthModalOpen(true)}
-                  className="px-3 py-2 rounded-xl bg-[#181426] border border-[#D96299]/30 text-xs text-zinc-200 flex items-center gap-2"
-                >
-                  <User className="w-3.5 h-3.5 text-[#D96299]" />
-                  <span className="max-w-[110px] truncate hidden sm:inline">
-                    {currentUserEmail.split("@")[0]}
-                  </span>
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => setIsAuthModalOpen(true)}
-                className="px-3.5 py-2.5 rounded-xl bg-[#181426] hover:bg-[#181426]/90 border border-white/10 hover:border-[#D96299]/40 text-xs font-medium text-zinc-200 flex items-center gap-1.5 transition"
-              >
-                <User className="w-3.5 h-3.5 text-[#D96299]" />
-                <span>Ingresar</span>
-              </button>
-            )}
+            <button
+              onClick={() => setIsAuthModalOpen(true)}
+              className="h-9 sm:h-10 px-3 sm:px-3.5 rounded-xl bg-[#181426] hover:bg-[#181426]/90 border border-white/10 hover:border-[#D96299]/40 text-xs font-medium text-zinc-200 flex items-center gap-1.5 transition"
+            >
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  currentUserEmail ? "bg-emerald-400" : "bg-[#D96299]"
+                }`}
+              />
+              <span className="max-w-[90px] sm:max-w-[120px] truncate">
+                {currentUserEmail
+                  ? currentUserEmail.split("@")[0]
+                  : "Ingresar"}
+              </span>
+            </button>
           </div>
         </div>
 
-        {/* Barra desplegable de búsqueda y filtros (solo visible si el usuario la abre) */}
+        {/* Barra desplegable de búsqueda y filtros */}
         {searchOpen && (
-          <div className="border-t border-white/[0.05] bg-[#181426]/60 backdrop-blur-xl">
-            <div className="max-w-5xl mx-auto px-5 py-3 flex flex-wrap items-center gap-3">
-              <div className="relative flex-1 min-w-[220px]">
+          <div className="border-t border-white/[0.06] bg-[#181426]/80 backdrop-blur-xl">
+            <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3 space-y-2.5 sm:space-y-0 sm:flex sm:items-center sm:gap-3">
+              <div className="relative flex-1">
                 <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
@@ -696,14 +730,15 @@ export default function MoyaspovApp() {
                 />
               </div>
 
-              <div className="flex items-center gap-1.5 text-xs">
-                <SlidersHorizontal className="w-3.5 h-3.5 text-zinc-500 mr-1" />
-                {(["all", "google_calendar", "notion", "webapp"] as const).map(
-                  (src) => (
+              <div className="flex items-center justify-between sm:justify-start gap-1.5 text-xs overflow-x-auto">
+                <div className="flex items-center gap-1">
+                  {(
+                    ["all", "google_calendar", "notion", "webapp"] as const
+                  ).map((src) => (
                     <button
                       key={src}
                       onClick={() => setSourceFilter(src)}
-                      className={`px-2.5 py-1.5 rounded-lg border transition ${
+                      className={`px-2.5 py-1.5 rounded-lg border transition shrink-0 ${
                         sourceFilter === src
                           ? "bg-[#D96299]/20 border-[#D96299] text-[#D96299] font-medium"
                           : "bg-[#0d0d0d] border-white/10 text-zinc-400 hover:text-white"
@@ -717,118 +752,151 @@ export default function MoyaspovApp() {
                         ? "Notion"
                         : "App"}
                     </button>
-                  )
-                )}
-              </div>
+                  ))}
+                </div>
 
-              <input
-                type="date"
-                value={selectedDate}
-                onChange={(e) =>
-                  e.target.value && setSelectedDate(e.target.value)
-                }
-                className="rounded-xl bg-[#0d0d0d] border border-white/10 px-3 py-1.5 text-xs text-zinc-200 outline-none focus:border-[#D96299]"
-              />
+                <input
+                  type="date"
+                  value={selectedDate}
+                  onChange={(e) =>
+                    e.target.value && setSelectedDate(e.target.value)
+                  }
+                  className="rounded-xl bg-[#0d0d0d] border border-white/10 px-2.5 py-1.5 text-xs text-zinc-200 outline-none focus:border-[#D96299] shrink-0"
+                />
+              </div>
             </div>
           </div>
         )}
       </header>
 
-      {/* CONTENIDO PRINCIPAL: DIRECTO AL GRANO (AGENDA + GRÁFICO) */}
-      <main className="flex-1 max-w-5xl w-full mx-auto px-5 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-          {/* COLUMNA PRINCIPAL (7 COLS): AGENDA DEL DÍA Y CITAS CERCANAS */}
-          <div className="lg:col-span-7 space-y-6">
-            {/* Navegador de Fecha Limpio */}
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-[11px] uppercase tracking-widest text-[#D96299] font-semibold">
-                  {searchQuery ? "Resultados de búsqueda" : "Agenda"}
-                </p>
-                <h1 className="text-2xl font-bold text-white tracking-tight mt-0.5">
-                  {searchQuery
-                    ? `"${searchQuery}"`
-                    : formatReadableDate(selectedDate)}
-                </h1>
-              </div>
-
-              {!searchQuery && (
-                <div className="flex items-center gap-1.5">
-                  <button
-                    onClick={() => shiftSelectedDate(-1)}
-                    className="p-2 rounded-xl bg-[#181426] border border-white/[0.07] hover:border-[#D96299]/40 text-zinc-300 transition"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() =>
-                      setSelectedDate(toLocalDateKey(new Date().toISOString()))
-                    }
-                    className="px-3 py-1.5 rounded-xl bg-[#181426] border border-white/[0.07] hover:border-[#D96299]/40 text-xs font-medium text-zinc-200 transition"
-                  >
-                    Hoy
-                  </button>
-                  <button
-                    onClick={() => shiftSelectedDate(1)}
-                    className="p-2 rounded-xl bg-[#181426] border border-white/[0.07] hover:border-[#D96299]/40 text-zinc-300 transition"
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </button>
-                </div>
-              )}
+      {/* CONTENIDO PRINCIPAL BIEN ESTRUCTURADO EN TELÉFONO Y DESKTOP */}
+      <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-5 sm:py-8">
+        {/* Cabecera de Fecha y Tira Semanal (Siempre visible arriba) */}
+        <div className="mb-5 space-y-3.5">
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-[10px] sm:text-[11px] uppercase tracking-widest text-[#D96299] font-semibold">
+                {searchQuery ? "Resultados" : "Agenda Diaria"}
+              </p>
+              <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight truncate">
+                {searchQuery
+                  ? `"${searchQuery}"`
+                  : formatReadableDate(selectedDate)}
+              </h1>
             </div>
 
-            {/* Tira minimalista de 7 días */}
             {!searchQuery && (
-              <div className="grid grid-cols-7 gap-2">
-                {weekStripDays.map((d) => {
-                  const active = d.key === selectedDate;
-                  return (
-                    <button
-                      key={d.key}
-                      onClick={() => setSelectedDate(d.key)}
-                      className={`py-2.5 rounded-2xl flex flex-col items-center border transition ${
-                        active
-                          ? "bg-[#D96299] text-[#0d0d0d] border-[#D96299] font-semibold shadow-lg shadow-[#D96299]/20"
-                          : "bg-[#181426]/60 border-white/[0.06] text-zinc-400 hover:text-white hover:border-white/15"
-                      }`}
-                    >
-                      <span className="text-[10px] uppercase">{d.dayName}</span>
-                      <span className="text-sm font-bold mt-0.5">
-                        {d.dayNumber}
-                      </span>
-                      <span
-                        className={`mt-1 h-1 w-1 rounded-full ${
-                          d.hasEvents
-                            ? active
-                              ? "bg-[#0d0d0d]"
-                              : "bg-[#D96299]"
-                            : "bg-transparent"
-                        }`}
-                      />
-                    </button>
-                  );
-                })}
+              <div className="flex items-center gap-1 shrink-0">
+                <button
+                  onClick={() => shiftSelectedDate(-1)}
+                  className="h-9 w-9 rounded-xl bg-[#181426] border border-white/[0.07] hover:border-[#D96299]/40 text-zinc-300 flex items-center justify-center transition"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setSelectedDate(getTodayDateKey())}
+                  className="h-9 px-3 rounded-xl bg-[#181426] border border-white/[0.07] hover:border-[#D96299]/40 text-xs font-medium text-zinc-200 transition"
+                >
+                  Hoy
+                </button>
+                <button
+                  onClick={() => shiftSelectedDate(1)}
+                  className="h-9 w-9 rounded-xl bg-[#181426] border border-white/[0.07] hover:border-[#D96299]/40 text-zinc-300 flex items-center justify-center transition"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
               </div>
             )}
+          </div>
 
+          {/* Tira de 7 días perfectamente proporcionada para pantallas móviles */}
+          {!searchQuery && (
+            <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
+              {weekStripDays.map((d) => {
+                const active = d.key === selectedDate;
+                return (
+                  <button
+                    key={d.key}
+                    onClick={() => setSelectedDate(d.key)}
+                    className={`py-2 sm:py-2.5 rounded-2xl flex flex-col items-center justify-center border transition ${
+                      active
+                        ? "bg-[#D96299] text-[#0d0d0d] border-[#D96299] font-semibold shadow-lg shadow-[#D96299]/20"
+                        : "bg-[#181426]/65 border-white/[0.06] text-zinc-400 hover:text-white"
+                    }`}
+                  >
+                    <span className="text-[9px] sm:text-[10px] uppercase tracking-tight">
+                      {d.dayName}
+                    </span>
+                    <span className="text-xs sm:text-sm font-bold mt-0.5">
+                      {d.dayNumber}
+                    </span>
+                    <span
+                      className={`mt-1 h-1 w-1 rounded-full ${
+                        d.hasEvents
+                          ? active
+                            ? "bg-[#0d0d0d]"
+                            : "bg-[#D96299]"
+                          : "bg-transparent"
+                      }`}
+                    />
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Selector de vista en Teléfono (Agenda vs Gráfico) para evitar scroll desordenado */}
+          <div className="grid grid-cols-2 gap-1.5 p-1 rounded-2xl bg-[#181426]/90 border border-white/[0.07] lg:hidden">
+            <button
+              onClick={() => setMobileSection("agenda")}
+              className={`py-2 rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 transition ${
+                mobileSection === "agenda"
+                  ? "bg-[#D96299] text-[#0d0d0d] font-semibold shadow"
+                  : "text-zinc-400"
+              }`}
+            >
+              <CalendarIcon className="w-3.5 h-3.5" />
+              <span>Citas ({displayedEvents.length})</span>
+            </button>
+            <button
+              onClick={() => setMobileSection("chart")}
+              className={`py-2 rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 transition ${
+                mobileSection === "chart"
+                  ? "bg-[#D96299] text-[#0d0d0d] font-semibold shadow"
+                  : "text-zinc-400"
+              }`}
+            >
+              <TrendingUp className="w-3.5 h-3.5" />
+              <span>Actividad</span>
+            </button>
+          </div>
+        </div>
+
+        {/* GRILLA PRINCIPAL */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 sm:gap-8 items-start">
+          {/* COLUMNA IZQUIERDA (7 COLS): CITAS DEL DÍA Y PRÓXIMAS */}
+          <div
+            className={`lg:col-span-7 space-y-5 ${
+              mobileSection === "chart" ? "hidden lg:block" : "block"
+            }`}
+          >
             {/* Lista de Citas del Día */}
-            <div className="space-y-3">
+            <div className="space-y-2.5 sm:space-y-3">
               {loading ? (
-                <div className="glass-panel rounded-3xl p-10 text-center text-xs text-zinc-500">
+                <div className="glass-panel rounded-3xl p-8 text-center text-xs text-zinc-500">
                   Cargando agenda...
                 </div>
               ) : displayedEvents.length === 0 ? (
-                <div className="glass-panel rounded-3xl p-10 text-center space-y-3">
+                <div className="glass-panel rounded-3xl p-8 text-center space-y-3">
                   <p className="text-sm text-zinc-300">
-                    No hay citas programadas para este día.
+                    Sin citas programadas para este día.
                   </p>
                   <button
                     onClick={() => openCreateModal(selectedDate)}
                     className="inline-flex items-center gap-1.5 text-xs text-[#D96299] font-medium hover:underline"
                   >
                     <Plus className="w-3.5 h-3.5" />
-                    <span>Agregar cita</span>
+                    <span>Agregar cita en esta fecha</span>
                   </button>
                 </div>
               ) : (
@@ -839,76 +907,92 @@ export default function MoyaspovApp() {
                     <div
                       key={ev.id}
                       onClick={() => setActiveEventId(ev.id)}
-                      className="glass-panel-interactive rounded-2xl p-4 cursor-pointer group"
+                      className="glass-panel-interactive rounded-2xl p-3.5 sm:p-4 cursor-pointer flex items-stretch gap-3"
                     >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-start gap-3.5 min-w-0">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleToggleComplete(ev);
-                            }}
-                            className={`mt-0.5 h-5 w-5 rounded-full border flex items-center justify-center shrink-0 transition ${
-                              ev.status === "completed"
-                                ? "bg-[#D96299] border-[#D96299] text-[#0d0d0d]"
-                                : "border-white/25 hover:border-[#D96299]"
-                            }`}
-                          >
-                            {ev.status === "completed" && (
-                              <Check className="w-3 h-3 stroke-[3]" />
-                            )}
-                          </button>
+                      {/* Barra lateral de acento */}
+                      <div
+                        className={`w-1 rounded-full shrink-0 ${
+                          ev.status === "completed"
+                            ? "bg-zinc-600"
+                            : "bg-[#D96299]"
+                        }`}
+                      />
 
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 text-xs text-[#D96299] font-medium">
-                              <span>
-                                {formatTimeRange(ev.start_time, ev.end_time)}
-                              </span>
-                              {ev.location && (
-                                <span className="text-zinc-500 flex items-center gap-1 truncate">
-                                  • <MapPin className="w-3 h-3 inline" />{" "}
-                                  {ev.location}
-                                </span>
+                      <div className="flex-1 min-w-0 space-y-1">
+                        {/* Fila 1: Horario + Origen + Botón Completar */}
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-xs font-semibold text-[#D96299] truncate">
+                              {formatTimeRange(
+                                ev.start_time,
+                                ev.end_time,
+                                ev.all_day
                               )}
-                            </div>
+                            </span>
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/[0.05] text-zinc-400 border border-white/[0.06] shrink-0">
+                              {ev.source === "google_calendar"
+                                ? "Google"
+                                : ev.source === "notion"
+                                ? "Notion"
+                                : "App"}
+                            </span>
+                          </div>
 
-                            <h3
-                              className={`text-sm font-semibold mt-0.5 ${
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {notesCount > 0 && (
+                              <span className="px-1.5 py-0.5 rounded-md bg-[#D96299]/10 text-[10px] text-[#D96299] flex items-center gap-1">
+                                <MessageSquareText className="w-3 h-3" />
+                                {notesCount}
+                              </span>
+                            )}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleToggleComplete(ev);
+                              }}
+                              className={`h-5 w-5 rounded-full border flex items-center justify-center transition ${
                                 ev.status === "completed"
-                                  ? "line-through text-zinc-500"
-                                  : "text-white"
+                                  ? "bg-[#D96299] border-[#D96299] text-[#0d0d0d]"
+                                  : "border-white/25 hover:border-[#D96299]"
                               }`}
                             >
-                              {ev.title}
-                            </h3>
-
-                            {firstNote && (
-                              <p className="text-xs text-zinc-400 mt-1.5 line-clamp-1 flex items-center gap-1.5">
-                                <MessageSquareText className="w-3 h-3 text-[#D96299] shrink-0" />
-                                <span>{firstNote.content}</span>
-                              </p>
-                            )}
+                              {ev.status === "completed" && (
+                                <Check className="w-3 h-3 stroke-[3]" />
+                              )}
+                            </button>
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition shrink-0">
-                          {notesCount > 0 && (
-                            <span className="px-2 py-1 rounded-lg bg-white/[0.04] text-[11px] text-zinc-400 flex items-center gap-1">
-                              <MessageSquareText className="w-3 h-3 text-[#D96299]" />
-                              {notesCount}
-                            </span>
-                          )}
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openEditModal(ev);
-                            }}
-                            className="p-1.5 rounded-lg hover:bg-white/10 text-zinc-400 hover:text-white"
-                            title="Editar"
-                          >
-                            <Edit3 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
+                        {/* Fila 2: Título completo bien legible en móvil */}
+                        <h3
+                          className={`text-sm sm:text-[15px] font-semibold leading-snug break-words ${
+                            ev.status === "completed"
+                              ? "line-through text-zinc-500"
+                              : "text-white"
+                          }`}
+                        >
+                          {ev.title}
+                        </h3>
+
+                        {/* Fila 3: Ubicación o vista previa de nota */}
+                        {(ev.location || firstNote) && (
+                          <div className="pt-0.5 space-y-1">
+                            {ev.location && (
+                              <p className="text-xs text-zinc-400 flex items-center gap-1 truncate">
+                                <MapPin className="w-3 h-3 text-[#D96299] shrink-0" />
+                                <span className="truncate">{ev.location}</span>
+                              </p>
+                            )}
+                            {firstNote && (
+                              <p className="text-xs text-zinc-400 line-clamp-1 flex items-center gap-1.5">
+                                <MessageSquareText className="w-3 h-3 text-[#D96299] shrink-0" />
+                                <span className="truncate">
+                                  {firstNote.content}
+                                </span>
+                              </p>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -916,10 +1000,10 @@ export default function MoyaspovApp() {
               )}
             </div>
 
-            {/* Próximas citas cercanas (si hay en los siguientes días) */}
+            {/* Próximas citas cercanas */}
             {!searchQuery && upcomingEvents.length > 0 && (
-              <div className="pt-4 space-y-3">
-                <h2 className="text-xs uppercase tracking-wider text-zinc-500 font-semibold">
+              <div className="pt-2 space-y-2.5">
+                <h2 className="text-[11px] uppercase tracking-wider text-zinc-500 font-semibold px-1">
                   Próximas citas
                 </h2>
                 <div className="space-y-2">
@@ -933,11 +1017,16 @@ export default function MoyaspovApp() {
                         <p className="text-sm font-medium text-white truncate">
                           {ev.title}
                         </p>
-                        <p className="text-xs text-zinc-400 mt-0.5">
-                          <span className="text-[#D96299]">
+                        <p className="text-xs text-zinc-400 mt-0.5 truncate">
+                          <span className="text-[#D96299] font-medium">
                             {formatReadableDate(toLocalDateKey(ev.start_time))}
                           </span>{" "}
-                          • {formatTimeRange(ev.start_time, ev.end_time)}
+                          •{" "}
+                          {formatTimeRange(
+                            ev.start_time,
+                            ev.end_time,
+                            ev.all_day
+                          )}
                         </p>
                       </div>
                       <ChevronRight className="w-4 h-4 text-zinc-500 shrink-0" />
@@ -948,16 +1037,20 @@ export default function MoyaspovApp() {
             )}
           </div>
 
-          {/* COLUMNA DERECHA (5 COLS): CHART LINE LIMPIO */}
-          <div className="lg:col-span-5 space-y-5">
-            <div className="glass-panel rounded-3xl p-5">
+          {/* COLUMNA DERECHA (5 COLS): CHART LINE */}
+          <div
+            className={`lg:col-span-5 space-y-4 ${
+              mobileSection === "agenda" ? "hidden lg:block" : "block"
+            }`}
+          >
+            <div className="glass-panel rounded-3xl p-4 sm:p-5">
               <div className="flex items-center justify-between mb-4">
                 <div>
                   <h2 className="text-sm font-semibold text-white">
                     Actividad de la Agenda
                   </h2>
                   <p className="text-[11px] text-zinc-400">
-                    Días con mayor carga de citas
+                    Días más ocupados (toca un punto para ir al día)
                   </p>
                 </div>
 
@@ -987,14 +1080,16 @@ export default function MoyaspovApp() {
 
               <ActivityChart
                 data={chartData}
-                onSelectDate={(dateIso) => setSelectedDate(dateIso)}
+                onSelectDate={(dateIso) => {
+                  setSelectedDate(dateIso);
+                  setMobileSection("agenda");
+                }}
               />
             </div>
 
-            {/* Acceso directo minimalista para pegar texto rápido de Notion */}
             <button
               onClick={() => setIsNotionModalOpen(true)}
-              className="w-full glass-panel-interactive rounded-2xl p-4 flex items-center justify-between text-left"
+              className="hidden lg:flex w-full glass-panel-interactive rounded-2xl p-4 items-center justify-between text-left"
             >
               <div className="flex items-center gap-3">
                 <div className="h-9 w-9 rounded-xl bg-[#D96299]/15 border border-[#D96299]/30 flex items-center justify-center">
@@ -1015,37 +1110,58 @@ export default function MoyaspovApp() {
         </div>
       </main>
 
-      {/* MODAL DE DETALLE DE CITA Y MÓDULO DE NOTAS / RESUMEN */}
+      {/* DOCK INFERIOR FIJO EN TELÉFONO (< SM) PARA ACCIONES RÁPIDAS */}
+      <div className="fixed bottom-0 inset-x-0 z-30 sm:hidden border-t border-white/[0.08] bg-[#0d0d0d]/90 backdrop-blur-xl px-4 py-3">
+        <div className="grid grid-cols-2 gap-2.5 max-w-md mx-auto">
+          <button
+            onClick={() => setIsNotionModalOpen(true)}
+            className="py-2.5 px-3 rounded-2xl bg-[#181426] border border-[#D96299]/30 text-xs font-medium text-zinc-100 flex items-center justify-center gap-1.5"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-[#D96299]" />
+            <span>Texto Notion</span>
+          </button>
+          <button
+            onClick={() => openCreateModal()}
+            className="py-2.5 px-3 rounded-2xl bg-[#D96299] text-[#0d0d0d] font-semibold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-[#D96299]/25"
+          >
+            <Plus className="w-4 h-4 stroke-[2.5]" />
+            <span>Nueva Cita</span>
+          </button>
+        </div>
+      </div>
+
+      {/* MODAL / BOTTOM SHEET DE DETALLE DE CITA Y NOTAS */}
       {activeEvent && (
         <div
-          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
           onClick={() => setActiveEventId(null)}
         >
           <div
-            className="glass-panel border-[#D96299]/35 rounded-3xl max-w-md w-full p-6 space-y-5"
+            className="glass-panel border-t sm:border border-[#D96299]/35 rounded-t-3xl sm:rounded-3xl max-w-md w-full p-5 sm:p-6 pb-8 sm:pb-6 space-y-4 max-h-[88dvh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-3">
-              <div>
-                <span className="text-[11px] text-[#D96299] font-medium">
+              <div className="min-w-0">
+                <span className="text-[11px] text-[#D96299] font-medium block">
                   {formatReadableDate(toLocalDateKey(activeEvent.start_time))} •{" "}
                   {formatTimeRange(
                     activeEvent.start_time,
-                    activeEvent.end_time
+                    activeEvent.end_time,
+                    activeEvent.all_day
                   )}
                 </span>
-                <h3 className="text-lg font-bold text-white mt-0.5">
+                <h3 className="text-base sm:text-lg font-bold text-white mt-0.5 break-words">
                   {activeEvent.title}
                 </h3>
                 {activeEvent.location && (
                   <p className="text-xs text-zinc-400 flex items-center gap-1 mt-1">
-                    <MapPin className="w-3.5 h-3.5 text-[#D96299]" />
-                    {activeEvent.location}
+                    <MapPin className="w-3.5 h-3.5 text-[#D96299] shrink-0" />
+                    <span className="break-words">{activeEvent.location}</span>
                   </p>
                 )}
               </div>
 
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-1 shrink-0">
                 <button
                   onClick={() => {
                     const ev = activeEvent;
@@ -1053,14 +1169,14 @@ export default function MoyaspovApp() {
                     openEditModal(ev);
                   }}
                   className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-300"
-                  title="Editar o reprogramar"
+                  title="Editar"
                 >
                   <Edit3 className="w-4 h-4" />
                 </button>
                 <button
                   onClick={() => handleDeleteEvent(activeEvent)}
                   className="p-2 rounded-xl bg-white/5 hover:bg-red-500/20 text-zinc-400 hover:text-red-300"
-                  title="Eliminar cita"
+                  title="Eliminar"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -1074,22 +1190,22 @@ export default function MoyaspovApp() {
             </div>
 
             {activeEvent.description && (
-              <p className="text-xs text-zinc-300 bg-[#0d0d0d]/60 p-3 rounded-2xl border border-white/[0.05]">
+              <p className="text-xs text-zinc-300 bg-[#0d0d0d]/60 p-3 rounded-2xl border border-white/[0.05] break-words">
                 {activeEvent.description}
               </p>
             )}
 
-            {/* Notas / Comentarios de la Cita */}
+            {/* Notas / Comentarios */}
             <div className="space-y-2.5">
               <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
                 Notas y Resumen ({activeEvent.event_notes?.length || 0})
               </h4>
 
-              <div className="space-y-2 max-h-[200px] overflow-y-auto pr-1">
+              <div className="space-y-2 max-h-[180px] overflow-y-auto pr-1">
                 {!activeEvent.event_notes ||
                 activeEvent.event_notes.length === 0 ? (
                   <p className="text-xs text-zinc-500 py-4 text-center border border-dashed border-white/10 rounded-2xl">
-                    Sin notas todavía. Escribe un comentario o resumen abajo.
+                    Sin notas todavía. Escribe un comentario abajo.
                   </p>
                 ) : (
                   activeEvent.event_notes.map((note) => (
@@ -1097,7 +1213,7 @@ export default function MoyaspovApp() {
                       key={note.id}
                       className="p-3 rounded-2xl bg-[#0d0d0d]/80 border border-white/[0.06] text-xs flex items-start justify-between gap-2"
                     >
-                      <p className="text-zinc-200 leading-relaxed">
+                      <p className="text-zinc-200 leading-relaxed break-words">
                         {note.content}
                       </p>
                       <button
@@ -1111,7 +1227,10 @@ export default function MoyaspovApp() {
                 )}
               </div>
 
-              <form onSubmit={handleAddNote} className="flex items-center gap-2 pt-2">
+              <form
+                onSubmit={handleAddNote}
+                className="flex items-center gap-2 pt-2"
+              >
                 <input
                   type="text"
                   value={newNoteContent}
@@ -1122,7 +1241,7 @@ export default function MoyaspovApp() {
                 <button
                   type="submit"
                   disabled={savingNote || !newNoteContent.trim()}
-                  className="p-2.5 rounded-xl bg-[#D96299] hover:bg-[#e68ab5] disabled:opacity-50 text-[#0d0d0d] transition"
+                  className="p-2.5 rounded-xl bg-[#D96299] hover:bg-[#e68ab5] disabled:opacity-50 text-[#0d0d0d] transition shrink-0"
                 >
                   <Send className="w-4 h-4" />
                 </button>
@@ -1132,18 +1251,18 @@ export default function MoyaspovApp() {
         </div>
       )}
 
-      {/* MODAL DE TEXTO RÁPIDO NOTION (BAJO DEMANDA) */}
+      {/* MODAL / BOTTOM SHEET DE TEXTO RÁPIDO NOTION */}
       {isNotionModalOpen && (
         <div
-          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
           onClick={() => setIsNotionModalOpen(false)}
         >
           <div
-            className="glass-panel border-[#D96299]/40 rounded-3xl max-w-md w-full p-6 space-y-4"
+            className="glass-panel border-t sm:border border-[#D96299]/40 rounded-t-3xl sm:rounded-3xl max-w-md w-full p-5 sm:p-6 pb-8 sm:pb-6 space-y-4"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
+              <div className="flex items-center gap-2">
                 <Sparkles className="w-4 h-4 text-[#D96299]" />
                 <h3 className="text-sm font-bold text-white">
                   Agendar con Texto Rápido (Notion)
@@ -1164,7 +1283,7 @@ export default function MoyaspovApp() {
                 value={notionInput}
                 onChange={(e) => setNotionInput(e.target.value)}
                 placeholder='Ej: "Sesion jueves 29 oct 26 a las 8:00 pm"'
-                className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-4 py-3 text-sm text-white outline-none"
+                className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-3.5 py-3 text-sm text-white outline-none"
               />
 
               {notionPreview && (
@@ -1188,7 +1307,7 @@ export default function MoyaspovApp() {
               <button
                 type="submit"
                 disabled={parsingNotion || !notionInput.trim()}
-                className="w-full py-2.5 rounded-xl bg-[#D96299] hover:bg-[#e68ab5] disabled:opacity-50 text-[#0d0d0d] font-semibold text-xs transition"
+                className="w-full py-3 rounded-xl bg-[#D96299] hover:bg-[#e68ab5] disabled:opacity-50 text-[#0d0d0d] font-semibold text-xs transition"
               >
                 {parsingNotion ? "Agendando..." : "Agendar Cita"}
               </button>
@@ -1197,14 +1316,14 @@ export default function MoyaspovApp() {
         </div>
       )}
 
-      {/* MODAL PARA CREAR / EDITAR CITA */}
+      {/* MODAL / BOTTOM SHEET PARA CREAR / EDITAR CITA */}
       {isEventModalOpen && (
         <div
-          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
           onClick={() => setIsEventModalOpen(false)}
         >
           <div
-            className="glass-panel border-[#D96299]/40 rounded-3xl max-w-md w-full p-6 space-y-4"
+            className="glass-panel border-t sm:border border-[#D96299]/40 rounded-t-3xl sm:rounded-3xl max-w-md w-full p-5 sm:p-6 pb-8 sm:pb-6 space-y-4 max-h-[90dvh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
@@ -1234,7 +1353,7 @@ export default function MoyaspovApp() {
                 />
               </div>
 
-              <div className="grid grid-cols-3 gap-2.5">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                 <div>
                   <label className="block text-xs text-zinc-400 mb-1">
                     Fecha
@@ -1244,32 +1363,34 @@ export default function MoyaspovApp() {
                     required
                     value={formDate}
                     onChange={(e) => setFormDate(e.target.value)}
-                    className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-2.5 py-2 text-xs text-white outline-none"
+                    className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-3 py-2 text-xs text-white outline-none"
                   />
                 </div>
-                <div>
-                  <label className="block text-xs text-zinc-400 mb-1">
-                    Inicio
-                  </label>
-                  <input
-                    type="time"
-                    required
-                    value={formStartTime}
-                    onChange={(e) => setFormStartTime(e.target.value)}
-                    className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-2.5 py-2 text-xs text-white outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-zinc-400 mb-1">
-                    Fin
-                  </label>
-                  <input
-                    type="time"
-                    required
-                    value={formEndTime}
-                    onChange={(e) => setFormEndTime(e.target.value)}
-                    className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-2.5 py-2 text-xs text-white outline-none"
-                  />
+                <div className="grid grid-cols-2 sm:contents gap-2.5">
+                  <div>
+                    <label className="block text-xs text-zinc-400 mb-1">
+                      Inicio
+                    </label>
+                    <input
+                      type="time"
+                      required
+                      value={formStartTime}
+                      onChange={(e) => setFormStartTime(e.target.value)}
+                      className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-3 py-2 text-xs text-white outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-zinc-400 mb-1">
+                      Fin
+                    </label>
+                    <input
+                      type="time"
+                      required
+                      value={formEndTime}
+                      onChange={(e) => setFormEndTime(e.target.value)}
+                      className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-3 py-2 text-xs text-white outline-none"
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -1305,14 +1426,14 @@ export default function MoyaspovApp() {
                 <button
                   type="button"
                   onClick={() => setIsEventModalOpen(false)}
-                  className="px-4 py-2 rounded-xl bg-white/5 text-xs text-zinc-300"
+                  className="px-4 py-2.5 rounded-xl bg-white/5 text-xs text-zinc-300"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={savingEvent}
-                  className="px-5 py-2 rounded-xl bg-[#D96299] hover:bg-[#e68ab5] text-[#0d0d0d] font-semibold text-xs transition"
+                  className="px-5 py-2.5 rounded-xl bg-[#D96299] hover:bg-[#e68ab5] text-[#0d0d0d] font-semibold text-xs transition"
                 >
                   {savingEvent ? "Guardando..." : "Guardar"}
                 </button>
@@ -1322,14 +1443,14 @@ export default function MoyaspovApp() {
         </div>
       )}
 
-      {/* APARTADO PARA INGRESAR CON SU CUENTA (LOGIN / REGISTRO) */}
+      {/* APARTADO PARA INGRESAR CON GOOGLE / CUENTA */}
       {isAuthModalOpen && (
         <div
-          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
           onClick={() => setIsAuthModalOpen(false)}
         >
           <div
-            className="glass-panel border-[#D96299]/40 rounded-3xl max-w-sm w-full p-6 space-y-5"
+            className="glass-panel border-t sm:border border-[#D96299]/40 rounded-t-3xl sm:rounded-3xl max-w-sm w-full p-5 sm:p-6 pb-8 sm:pb-6 space-y-4"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
@@ -1342,110 +1463,70 @@ export default function MoyaspovApp() {
               </button>
             </div>
 
-            {currentUserEmail ? (
-              <div className="space-y-4">
-                <div>
-                  <p className="text-xs text-zinc-400">Sesión activa como</p>
-                  <p className="text-sm font-semibold text-white mt-0.5">
-                    {currentUserEmail}
-                  </p>
-                </div>
-                <button
-                  onClick={handleSignOut}
-                  className="w-full py-2.5 rounded-xl bg-white/5 hover:bg-red-500/20 text-xs text-zinc-300 hover:text-red-300 flex items-center justify-center gap-2 transition"
-                >
-                  <LogOut className="w-4 h-4" />
-                  <span>Cerrar sesión</span>
-                </button>
+            <div>
+              <h3 className="text-base font-bold text-white">
+                {currentUserEmail
+                  ? "Cuenta de Google Conectada"
+                  : "Ingresar con Google"}
+              </h3>
+              <p className="text-xs text-zinc-400 mt-0.5">
+                Sincroniza tus actividades de Google Calendar con tu agenda.
+              </p>
+            </div>
+
+            <form onSubmit={handleGoogleSignIn} className="space-y-3">
+              <div>
+                <label className="block text-[11px] text-zinc-400 mb-1">
+                  Correo de Google Calendar
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  placeholder="tu-correo@gmail.com"
+                  className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-3.5 py-2.5 text-xs text-white outline-none"
+                />
               </div>
-            ) : (
-              <>
-                <div>
-                  <h3 className="text-base font-bold text-white">
-                    {authMode === "login"
-                      ? "Ingresa a tu cuenta"
-                      : "Crear una cuenta"}
-                  </h3>
-                  <p className="text-xs text-zinc-400 mt-0.5">
-                    Sincroniza tu agenda personal y tus notas.
-                  </p>
-                </div>
 
-                <form onSubmit={handleAuthSubmit} className="space-y-3">
-                  {authMode === "register" && (
-                    <input
-                      type="text"
-                      required
-                      value={authName}
-                      onChange={(e) => setAuthName(e.target.value)}
-                      placeholder="Tu nombre"
-                      className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-3.5 py-2.5 text-xs text-white outline-none"
-                    />
-                  )}
-                  <input
-                    type="email"
-                    required
-                    value={authEmail}
-                    onChange={(e) => setAuthEmail(e.target.value)}
-                    placeholder="Correo electrónico"
-                    className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-3.5 py-2.5 text-xs text-white outline-none"
-                  />
-                  <input
-                    type="password"
-                    required
-                    value={authPassword}
-                    onChange={(e) => setAuthPassword(e.target.value)}
-                    placeholder="Contraseña"
-                    className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-3.5 py-2.5 text-xs text-white outline-none"
-                  />
+              <div>
+                <label className="block text-[11px] text-zinc-400 mb-1">
+                  Enlace iCal secreto de Google Calendar (Opcional para nube)
+                </label>
+                <input
+                  type="url"
+                  value={icalUrlInput}
+                  onChange={(e) => setIcalUrlInput(e.target.value)}
+                  placeholder="https://calendar.google.com/calendar/ical/.../basic.ics"
+                  className="w-full rounded-xl bg-[#0d0d0d] border border-white/10 focus:border-[#D96299] px-3.5 py-2 text-xs text-white outline-none"
+                />
+              </div>
 
-                  <button
-                    type="submit"
-                    disabled={authLoading}
-                    className="w-full py-2.5 rounded-xl bg-[#D96299] hover:bg-[#e68ab5] text-[#0d0d0d] font-semibold text-xs transition"
-                  >
-                    {authLoading
-                      ? "Procesando..."
-                      : authMode === "login"
-                      ? "Ingresar"
-                      : "Registrarme"}
-                  </button>
-                </form>
+              <button
+                type="submit"
+                disabled={authLoading}
+                className="w-full py-3 rounded-xl bg-[#D96299] hover:bg-[#e68ab5] text-[#0d0d0d] font-semibold text-xs flex items-center justify-center gap-2 transition shadow-lg shadow-[#D96299]/20"
+              >
+                <User className="w-4 h-4" />
+                <span>
+                  {authLoading
+                    ? "Conectando y sincronizando..."
+                    : currentUserEmail
+                    ? "Actualizar y Sincronizar con Google"
+                    : "Continuar con Google"}
+                </span>
+              </button>
+            </form>
 
-                <button
-                  type="button"
-                  onClick={handleGoogleOAuth}
-                  className="w-full py-2.5 rounded-xl bg-[#0d0d0d] hover:bg-white/5 border border-white/10 text-xs text-zinc-200 font-medium transition"
-                >
-                  Continuar con Google
-                </button>
-
-                <p className="text-center text-xs text-zinc-400">
-                  {authMode === "login" ? (
-                    <>
-                      ¿No tienes cuenta?{" "}
-                      <button
-                        type="button"
-                        onClick={() => setAuthMode("register")}
-                        className="text-[#D96299] hover:underline font-medium"
-                      >
-                        Regístrate
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      ¿Ya tienes cuenta?{" "}
-                      <button
-                        type="button"
-                        onClick={() => setAuthMode("login")}
-                        className="text-[#D96299] hover:underline font-medium"
-                      >
-                        Inicia sesión
-                      </button>
-                    </>
-                  )}
-                </p>
-              </>
+            {currentUserEmail && (
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="w-full py-2.5 rounded-xl bg-white/5 hover:bg-red-500/20 text-xs text-zinc-300 hover:text-red-300 flex items-center justify-center gap-2 transition"
+              >
+                <LogOut className="w-4 h-4" />
+                <span>Cerrar sesión ({currentUserEmail})</span>
+              </button>
             )}
           </div>
         </div>

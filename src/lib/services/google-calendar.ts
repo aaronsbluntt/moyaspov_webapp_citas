@@ -1,4 +1,6 @@
 import { google } from "googleapis";
+import { execFile } from "child_process";
+import { promisify } from "util";
 import {
   DEFAULT_TIMEZONE,
   DEFAULT_USER_ID,
@@ -6,6 +8,8 @@ import {
   getSupabaseServerClient,
   isSupabaseServerConfigured,
 } from "@/lib/supabase/server";
+
+const execFileAsync = promisify(execFile);
 
 export function isGoogleCalendarConfigured(): boolean {
   const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -21,11 +25,10 @@ export function isGoogleCalendarConfigured(): boolean {
 
 /**
  * Crea el cliente OAuth2 autenticado de Google Calendar.
- * Soporta tanto variables de entorno globales como tokens por usuario almacenados en `user_integrations`.
  */
 export async function getGoogleCalendarClient(userId?: string) {
-  let clientId = process.env.GOOGLE_CLIENT_ID;
-  let clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   const redirectUri =
     process.env.GOOGLE_REDIRECT_URI ||
     "http://localhost:3000/api/auth/google/callback";
@@ -33,7 +36,6 @@ export async function getGoogleCalendarClient(userId?: string) {
   let accessToken: string | undefined;
   let calendarId = process.env.GOOGLE_CALENDAR_ID || "primary";
 
-  // Buscar primero si el usuario tiene integración personalizada en Supabase
   if (userId && isSupabaseServerConfigured()) {
     const supabase = getSupabaseServerClient();
     const { data: integration } = await supabase
@@ -55,7 +57,7 @@ export async function getGoogleCalendarClient(userId?: string) {
 
   if (!clientId || !clientSecret || (!refreshToken && !accessToken)) {
     throw new Error(
-      "Credenciales de Google Calendar no configuradas. Revisa GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET y GOOGLE_REFRESH_TOKEN."
+      "Credenciales OAuth de Google Calendar no configuradas en variables de entorno."
     );
   }
 
@@ -74,29 +76,262 @@ export async function getGoogleCalendarClient(userId?: string) {
   return { calendar, calendarId };
 }
 
+interface NormalizedGoogleEvent {
+  id: string;
+  summary: string;
+  description: string | null;
+  location: string | null;
+  startIso: string;
+  endIso: string;
+  allDay: boolean;
+  timeZone: string;
+  htmlLink: string | null;
+  etag: string | null;
+  eventType: "appointment" | "block";
+  status: string;
+}
+
 /**
- * Extrae eventos de Google Calendar en tiempo real dentro de un rango de fechas.
+ * Parsea un feed iCal (.ics) de Google Calendar para permitir sincronización en Vercel
+ * sin requerir verificación de proyecto en Google Cloud Console.
  */
-export async function fetchGoogleCalendarEvents(options: {
+function parseIcsFeed(icsText: string): NormalizedGoogleEvent[] {
+  const events: NormalizedGoogleEvent[] = [];
+  const blocks = icsText.split("BEGIN:VEVENT");
+
+  for (let i = 1; i < blocks.length; i++) {
+    const block = blocks[i].split("END:VEVENT")[0] || "";
+    const unfolded = block.replace(/\r?\n[ \t]/g, "");
+    const lines = unfolded.split(/\r?\n/);
+
+    let uid = "";
+    let summary = "Evento de Google Calendar";
+    let description: string | null = null;
+    let location: string | null = null;
+    let dtStartRaw = "";
+    let dtEndRaw = "";
+    let isAllDay = false;
+    let status = "confirmed";
+
+    for (const line of lines) {
+      if (line.startsWith("UID:")) uid = line.slice(4).trim();
+      else if (line.startsWith("SUMMARY:"))
+        summary = line
+          .slice(8)
+          .replace(/\\,/g, ",")
+          .replace(/\\n/g, " ")
+          .trim();
+      else if (line.startsWith("DESCRIPTION:"))
+        description = line
+          .slice(12)
+          .replace(/\\,/g, ",")
+          .replace(/\\n/g, "\n")
+          .trim();
+      else if (line.startsWith("LOCATION:"))
+        location = line.slice(9).replace(/\\,/g, ",").trim();
+      else if (line.startsWith("STATUS:"))
+        status = line.slice(7).trim().toLowerCase();
+      else if (line.startsWith("DTSTART")) {
+        if (line.includes("VALUE=DATE")) isAllDay = true;
+        dtStartRaw = line.split(":").slice(1).join(":").trim();
+      } else if (line.startsWith("DTEND")) {
+        dtEndRaw = line.split(":").slice(1).join(":").trim();
+      }
+    }
+
+    if (!uid || !dtStartRaw || status === "cancelled") continue;
+
+    const parseIcsDate = (raw: string, allDayFlag: boolean): string | null => {
+      if (allDayFlag || /^\d{8}$/.test(raw)) {
+        const y = raw.slice(0, 4);
+        const m = raw.slice(4, 6);
+        const d = raw.slice(6, 8);
+        return new Date(`${y}-${m}-${d}T09:00:00-04:00`).toISOString();
+      }
+      const match = raw.match(
+        /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z)?$/
+      );
+      if (match) {
+        const [, y, mo, da, h, mi, s, z] = match;
+        return new Date(
+          `${y}-${mo}-${da}T${h}:${mi}:${s}${z ? "Z" : "-04:00"}`
+        ).toISOString();
+      }
+      return null;
+    };
+
+    const startIso = parseIcsDate(dtStartRaw, isAllDay);
+    const endIso = dtEndRaw
+      ? parseIcsDate(dtEndRaw, isAllDay)
+      : startIso
+      ? new Date(new Date(startIso).getTime() + 3600000).toISOString()
+      : null;
+
+    if (!startIso || !endIso) continue;
+
+    events.push({
+      id: uid.replace(/@google\.com$/, ""),
+      summary,
+      description,
+      location,
+      startIso,
+      endIso,
+      allDay: isAllDay,
+      timeZone: DEFAULT_TIMEZONE,
+      htmlLink: null,
+      etag: null,
+      eventType: "appointment",
+      status: "confirmed",
+    });
+  }
+
+  return events;
+}
+
+/**
+ * Extrae eventos de Google Calendar usando:
+ * 1) OAuth2 (si GOOGLE_CLIENT_ID está configurado)
+ * 2) Feed iCal (.ics) si el usuario configuró ical_url en user_integrations o GOOGLE_ICAL_URL
+ * 3) CLI local `gcalendar` si está disponible en el entorno local
+ */
+export async function fetchNormalizedGoogleEvents(options: {
   timeMin: string;
   timeMax: string;
   userId?: string;
-}) {
-  if (!isGoogleCalendarConfigured()) {
-    return [];
+}): Promise<NormalizedGoogleEvent[]> {
+  // 1. Intentar con OAuth2 oficial
+  if (isGoogleCalendarConfigured()) {
+    try {
+      const { calendar, calendarId } = await getGoogleCalendarClient(
+        options.userId
+      );
+      const response = await calendar.events.list({
+        calendarId,
+        timeMin: new Date(options.timeMin).toISOString(),
+        timeMax: new Date(options.timeMax).toISOString(),
+        singleEvents: true,
+        orderBy: "startTime",
+        maxResults: 250,
+      });
+
+      const items = response.data.items || [];
+      const normalized: NormalizedGoogleEvent[] = [];
+
+      for (const item of items) {
+        if (!item.id || item.status === "cancelled") continue;
+        const allDay = Boolean(item.start?.date && !item.start?.dateTime);
+        const startIso =
+          item.start?.dateTime ||
+          (item.start?.date ? `${item.start.date}T09:00:00-04:00` : null);
+        const endIso =
+          item.end?.dateTime ||
+          (item.end?.date ? `${item.end.date}T10:00:00-04:00` : null);
+
+        if (!startIso || !endIso) continue;
+
+        normalized.push({
+          id: item.id,
+          summary: item.summary || "Cita en Google Calendar",
+          description: item.description || null,
+          location: item.location || null,
+          startIso: new Date(startIso).toISOString(),
+          endIso: new Date(endIso).toISOString(),
+          allDay,
+          timeZone: item.start?.timeZone || DEFAULT_TIMEZONE,
+          htmlLink: item.hangoutLink || item.htmlLink || null,
+          etag: item.etag || null,
+          eventType: item.eventType === "focusTime" ? "block" : "appointment",
+          status: item.status || "confirmed",
+        });
+      }
+      return normalized;
+    } catch {
+      // Continuar a otros métodos si falla OAuth
+    }
   }
 
-  const { calendar, calendarId } = await getGoogleCalendarClient(options.userId);
-  const response = await calendar.events.list({
-    calendarId,
-    timeMin: new Date(options.timeMin).toISOString(),
-    timeMax: new Date(options.timeMax).toISOString(),
-    singleEvents: true,
-    orderBy: "startTime",
-    maxResults: 250,
-  });
+  // 2. Intentar con URL iCal (.ics) configurada en variables de entorno o en Supabase user_integrations
+  let icalUrl = process.env.GOOGLE_ICAL_URL || "";
+  if (!icalUrl && isSupabaseServerConfigured()) {
+    const supabase = getSupabaseServerClient();
+    const { data: integration } = await supabase
+      .from("user_integrations")
+      .select("config")
+      .eq("user_id", options.userId || DEFAULT_USER_ID)
+      .eq("provider", "google_calendar")
+      .maybeSingle();
 
-  return response.data.items || [];
+    const cfg = integration?.config as Record<string, unknown> | undefined;
+    if (cfg && typeof cfg.ical_url === "string" && cfg.ical_url.startsWith("http")) {
+      icalUrl = cfg.ical_url;
+    }
+  }
+
+  if (icalUrl) {
+    try {
+      const res = await fetch(icalUrl, { cache: "no-store" });
+      if (res.ok) {
+        const text = await res.text();
+        if (text.includes("BEGIN:VCALENDAR")) {
+          return parseIcsFeed(text);
+        }
+      }
+    } catch {
+      // Continuar al fallback local
+    }
+  }
+
+  // 3. Fallback local con CLI `gcalendar` si está instalado en el sistema
+  try {
+    const binPath = "/Users/aaron/.gemini/antigravity/bin/gcalendar";
+    const { stdout } = await execFileAsync(binPath, [
+      "readonly",
+      "events",
+      "--start",
+      new Date(options.timeMin).toISOString(),
+      "--end",
+      new Date(options.timeMax).toISOString(),
+      "--max",
+      "250",
+      "--json",
+    ]);
+
+    const items = JSON.parse(stdout);
+    if (Array.isArray(items)) {
+      const normalized: NormalizedGoogleEvent[] = [];
+      for (const item of items) {
+        if (!item.id || item.status === "cancelled") continue;
+        const allDay = Boolean(item.start?.date && !item.start?.dateTime);
+        const startIso =
+          item.start?.dateTime ||
+          (item.start?.date ? `${item.start.date}T09:00:00-04:00` : null);
+        const endIso =
+          item.end?.dateTime ||
+          (item.end?.date ? `${item.end.date}T10:00:00-04:00` : null);
+        if (!startIso || !endIso) continue;
+
+        normalized.push({
+          id: item.id,
+          summary: item.summary || "Evento en Google Calendar",
+          description: item.description || null,
+          location: item.location || null,
+          startIso: new Date(startIso).toISOString(),
+          endIso: new Date(endIso).toISOString(),
+          allDay,
+          timeZone: item.start?.timeZone || DEFAULT_TIMEZONE,
+          htmlLink: item.hangoutLink || item.htmlLink || null,
+          etag: item.etag || null,
+          eventType: item.eventType === "focusTime" ? "block" : "appointment",
+          status: item.status || "confirmed",
+        });
+      }
+      return normalized;
+    }
+  } catch {
+    // En producción (Vercel) si no hay CLI, retorna vacío de forma segura
+  }
+
+  return [];
 }
 
 /**
@@ -221,7 +456,7 @@ export async function syncGoogleCalendarToSupabase(options: {
   const userId = options.userId || DEFAULT_USER_ID;
   const workspaceId = options.workspaceId || DEFAULT_WORKSPACE_ID;
 
-  const googleItems = await fetchGoogleCalendarEvents({
+  const googleItems = await fetchNormalizedGoogleEvents({
     timeMin: options.timeMin,
     timeMax: options.timeMax,
     userId,
@@ -235,20 +470,16 @@ export async function syncGoogleCalendarToSupabase(options: {
   const upsertedEvents = [];
 
   for (const item of googleItems) {
-    if (!item.id || item.status === "cancelled") continue;
-
-    const startIso =
-      item.start?.dateTime ||
-      (item.start?.date ? `${item.start.date}T09:00:00.000Z` : null);
-    const endIso =
-      item.end?.dateTime ||
-      (item.end?.date ? `${item.end.date}T10:00:00.000Z` : null);
-
-    if (!startIso || !endIso) continue;
+    const cleanDesc = item.description
+      ? item.description
+          .replace(/<[^>]*>/g, " ")
+          .replace(/\s+/g, " ")
+          .trim()
+      : null;
 
     const { data: existing } = await supabase
       .from("events")
-      .select("id")
+      .select("id, status")
       .eq("user_id", userId)
       .eq("google_event_id", item.id)
       .maybeSingle();
@@ -256,21 +487,26 @@ export async function syncGoogleCalendarToSupabase(options: {
     const eventPayload = {
       user_id: userId,
       workspace_id: workspaceId,
-      title: item.summary || "Evento de Google Calendar",
-      description: item.description || null,
-      event_type: "appointment",
-      status: "scheduled",
+      title: item.summary || "Evento en Google Calendar",
+      description: cleanDesc,
+      event_type: item.eventType,
+      status:
+        existing?.status === "completed"
+          ? "completed"
+          : new Date(item.endIso) < new Date()
+          ? "completed"
+          : "scheduled",
       priority: "medium",
-      start_time: new Date(startIso).toISOString(),
-      end_time: new Date(endIso).toISOString(),
-      all_day: Boolean(item.start?.date && !item.start?.dateTime),
-      timezone: item.start?.timeZone || DEFAULT_TIMEZONE,
-      location: item.location || null,
-      meeting_url: item.hangoutLink || null,
+      start_time: item.startIso,
+      end_time: item.endIso,
+      all_day: item.allDay,
+      timezone: item.timeZone || DEFAULT_TIMEZONE,
+      location: item.location,
+      meeting_url: item.htmlLink,
       color: "#D96299",
       source: "google_calendar",
       google_event_id: item.id,
-      google_etag: item.etag || null,
+      google_etag: item.etag,
       sync_status: "synced",
       last_synced_at: new Date().toISOString(),
     };
