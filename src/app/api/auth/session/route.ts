@@ -111,6 +111,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       authenticated: true,
+      profileId: profile.id,
       user: {
         id: profile.id,
         email: profile.email,

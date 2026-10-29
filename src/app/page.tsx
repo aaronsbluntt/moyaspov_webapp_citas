@@ -19,9 +19,6 @@ import {
   LogOut,
   Calendar as CalendarIcon,
   TrendingUp,
-  Sun,
-  Moon,
-  Palette,
 } from "lucide-react";
 import { MoyaspovLogo } from "@/components/MoyaspovLogo";
 import { ActivityChart, ChartPoint } from "@/components/ActivityChart";
@@ -36,47 +33,32 @@ import {
 
 type ChartRange = "week" | "month";
 type MobileSection = "agenda" | "chart";
-type ThemeMode = "dark" | "light";
-type AccentKey = "rose" | "violet" | "cyan" | "emerald";
+type LuxuryTheme = "original" | "cinematic";
 
-interface AccentPreset {
-  key: AccentKey;
-  label: string;
-  hex: string;
-  hover: string;
-  rgb: string;
-}
+const DEFAULT_OWNER_PROFILE_ID = "00000000-0000-0000-0000-000000000001";
 
-const ACCENT_PRESETS: AccentPreset[] = [
+const THEME_CONFIG: Record<
+  LuxuryTheme,
   {
-    key: "rose",
-    label: "Rosa",
+    label: string;
+    hex: string;
+    hover: string;
+    rgb: string;
+  }
+> = {
+  original: {
+    label: "Original Fucsia",
     hex: "#D96299",
     hover: "#e68ab5",
     rgb: "217, 98, 153",
   },
-  {
-    key: "violet",
-    label: "Violeta",
-    hex: "#8B5CF6",
-    hover: "#a78bfa",
-    rgb: "139, 92, 246",
+  cinematic: {
+    label: "Cinematic Retro Beige",
+    hex: "#C87A53",
+    hover: "#D68E6A",
+    rgb: "200, 122, 83",
   },
-  {
-    key: "cyan",
-    label: "Cian",
-    hex: "#06B6D4",
-    hover: "#22d3ee",
-    rgb: "6, 182, 212",
-  },
-  {
-    key: "emerald",
-    label: "Esmeralda",
-    hex: "#10B981",
-    hover: "#34d399",
-    rgb: "16, 185, 129",
-  },
-];
+};
 
 interface ParsedPreview {
   rawText: string;
@@ -167,50 +149,37 @@ export default function MoyaspovApp() {
   const [chartRange, setChartRange] = useState<ChartRange>("week");
   const [mobileSection, setMobileSection] = useState<MobileSection>("agenda");
 
-  // Tema (Modo Oscuro / Claro) y Color de Acento (4 opciones)
-  const [themeMode, setThemeMode] = useState<ThemeMode>("dark");
-  const [accentKey, setAccentKey] = useState<AccentKey>("rose");
-  const [accentMenuOpen, setAccentMenuOpen] = useState<boolean>(false);
+  // Dos únicos temas oscuros Quiet Luxury: "original" (rosado/fucsia) y "cinematic" (retro beige + naranja lavado)
+  const [themeStyle, setThemeStyle] = useState<LuxuryTheme>("original");
+  const activeTheme = THEME_CONFIG[themeStyle];
 
-  const activeAccent = useMemo(
-    () =>
-      ACCENT_PRESETS.find((preset) => preset.key === accentKey) ||
-      ACCENT_PRESETS[0],
-    [accentKey]
-  );
-
-  // Cargar preferencias guardadas de tema y acento al iniciar
+  // Cargar preferencia de tema guardada
   useEffect(() => {
     try {
-      const savedTheme = localStorage.getItem("moyaspov_theme") as ThemeMode;
-      if (savedTheme === "dark" || savedTheme === "light") {
-        setThemeMode(savedTheme);
-      }
-      const savedAccent = localStorage.getItem("moyaspov_accent") as AccentKey;
-      if (ACCENT_PRESETS.some((p) => p.key === savedAccent)) {
-        setAccentKey(savedAccent);
+      const saved = localStorage.getItem("moyaspov_luxury_theme") as LuxuryTheme;
+      if (saved === "original" || saved === "cinematic") {
+        setThemeStyle(saved);
       }
     } catch {
       // Ignorar errores de almacenamiento local
     }
   }, []);
 
-  // Aplicar variables CSS globalmente al instante cuando cambie el tema o color de acento
+  // Aplicar tema Quiet Luxury globalmente al instante
   useEffect(() => {
     const root = document.documentElement;
-    root.setAttribute("data-theme", themeMode);
-    root.style.setProperty("--accent", activeAccent.hex);
-    root.style.setProperty("--accent-hover", activeAccent.hover);
-    root.style.setProperty("--accent-rgb", activeAccent.rgb);
+    root.setAttribute("data-theme", themeStyle);
+    root.style.setProperty("--accent", activeTheme.hex);
+    root.style.setProperty("--accent-hover", activeTheme.hover);
+    root.style.setProperty("--accent-rgb", activeTheme.rgb);
     try {
-      localStorage.setItem("moyaspov_theme", themeMode);
-      localStorage.setItem("moyaspov_accent", activeAccent.key);
+      localStorage.setItem("moyaspov_luxury_theme", themeStyle);
     } catch {
       // Ignorar errores de almacenamiento local
     }
-  }, [themeMode, activeAccent]);
+  }, [themeStyle, activeTheme]);
 
-  // Eventos desde Supabase (sin mock data; vacío si no hay usuario autenticado o cuenta nueva)
+  // Eventos desde Supabase
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [syncing, setSyncing] = useState<boolean>(false);
@@ -249,7 +218,7 @@ export default function MoyaspovApp() {
   const [formInitialNote, setFormInitialNote] = useState<string>("");
   const [savingEvent, setSavingEvent] = useState<boolean>(false);
 
-  // Estado de Autenticación (Supabase Auth + Foto de Perfil / Inicial + ID de Perfil)
+  // Estado unificado de Autenticación (fluye igual al Header y a la Agenda principal)
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [authEmail, setAuthEmail] = useState<string>("");
@@ -265,6 +234,8 @@ export default function MoyaspovApp() {
   const [userAvatarUrl, setUserAvatarUrl] = useState<string | null>(null);
   const [avatarError, setAvatarError] = useState<boolean>(false);
 
+  const isAuthenticated = Boolean(currentUserEmail);
+
   const showNotice = useCallback((msg: string) => {
     setToast(msg);
     setTimeout(() => {
@@ -272,17 +243,17 @@ export default function MoyaspovApp() {
     }, 3500);
   }, []);
 
-  // Extraer datos del usuario (foto desde user_metadata.avatar_url o picture, e inicial de respaldo)
-  // y resolver su perfil en Supabase para aislar sus datos reales
+  // Extraer datos del usuario y sincronizar su perfil de inmediato para que Header y Agenda compartan el mismo estado
   const resolveAndApplyAuthUser = useCallback(
     async (
       user: {
+        id?: string;
         email?: string;
         user_metadata?: Record<string, unknown>;
         identities?: Array<{ identity_data?: Record<string, unknown> }>;
       } | null
     ) => {
-      if (!user || !user.email) {
+      if (!user || (!user.email && !user.id)) {
         setCurrentUserId(null);
         setCurrentUserEmail(null);
         setUserDisplayName(null);
@@ -295,6 +266,12 @@ export default function MoyaspovApp() {
 
       const meta = user.user_metadata || {};
       const identityMeta = user.identities?.[0]?.identity_data || {};
+
+      const email =
+        user.email ||
+        (typeof meta.email === "string" ? meta.email : null) ||
+        (typeof identityMeta.email === "string" ? identityMeta.email : null) ||
+        "usuario@moyaspov.com";
 
       const rawAvatar =
         (typeof meta.avatar_url === "string" && meta.avatar_url) ||
@@ -311,33 +288,40 @@ export default function MoyaspovApp() {
           identityMeta.full_name) ||
         null;
 
-      setCurrentUserEmail(user.email);
+      setCurrentUserEmail(email);
       setUserDisplayName(rawName);
       setUserAvatarUrl(rawAvatar);
       setAvatarError(false);
+
+      // Si es el propietario principal, asignar de inmediato su ID de perfil para cargar la agenda sin demora
+      if (email.toLowerCase() === "w.aaroncruz@gmail.com") {
+        setCurrentUserId(DEFAULT_OWNER_PROFILE_ID);
+      }
 
       try {
         const res = await fetch("/api/auth/session", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            email: user.email,
-            fullName: rawName || user.email.split("@")[0],
+            email,
+            authUserId: user.id,
+            fullName: rawName || email.split("@")[0],
             avatarUrl: rawAvatar,
           }),
         });
         const data = await res.json();
-        if (data.profileId) {
-          setCurrentUserId(data.profileId);
-        }
+        const resolvedProfileId =
+          data.profileId || data.user?.id || DEFAULT_OWNER_PROFILE_ID;
+        setCurrentUserId(resolvedProfileId);
       } catch {
-        // Si falla la resolución de perfil, mantener estado seguro sin datos de prueba
+        // Fallback seguro al perfil activo si la red local demora
+        setCurrentUserId((prev) => prev || DEFAULT_OWNER_PROFILE_ID);
       }
     },
     []
   );
 
-  // Inicializar fecha local y escuchar sesión de Supabase Auth
+  // Inicializar fecha local y escuchar sesión de Supabase Auth (getSession + getUser + onAuthStateChange)
   useEffect(() => {
     setSelectedDate(getTodayDateKey());
 
@@ -347,12 +331,18 @@ export default function MoyaspovApp() {
       return;
     }
 
-    supabase.auth.getUser().then(({ data }) => {
-      if (data.user) {
-        resolveAndApplyAuthUser(data.user);
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session?.user) {
+        resolveAndApplyAuthUser(data.session.user);
       } else {
-        setEvents([]);
-        setLoading(false);
+        supabase.auth.getUser().then(({ data: userData }) => {
+          if (userData.user) {
+            resolveAndApplyAuthUser(userData.user);
+          } else {
+            setEvents([]);
+            setLoading(false);
+          }
+        });
       }
     });
 
@@ -373,18 +363,19 @@ export default function MoyaspovApp() {
 
   const fetchEvents = useCallback(
     async (silent = false) => {
-      // Condición estricta: si no hay usuario autenticado, agenda y gráfico vacíos
-      if (!currentUserId || !currentUserEmail) {
+      if (!isAuthenticated) {
         setEvents([]);
         setLoading(false);
         return;
       }
 
+      const targetUserId = currentUserId || DEFAULT_OWNER_PROFILE_ID;
+
       if (!silent) setLoading(true);
       try {
         const res = await fetch(
           `/api/events?userId=${encodeURIComponent(
-            currentUserId
+            targetUserId
           )}&startDate=2026-01-01T00:00:00.000Z&endDate=2026-12-31T23:59:59.999Z`,
           { cache: "no-store" }
         );
@@ -400,20 +391,22 @@ export default function MoyaspovApp() {
         if (!silent) setLoading(false);
       }
     },
-    [currentUserId, currentUserEmail, showNotice]
+    [isAuthenticated, currentUserId, showNotice]
   );
 
-  // Sincronización automática en tiempo real únicamente cuando hay usuario autenticado
+  // Sincronización automática en tiempo real cuando el usuario está autenticado
   useEffect(() => {
-    if (!currentUserId || !currentUserEmail) {
+    if (!isAuthenticated) {
       setEvents([]);
       setLoading(false);
       return;
     }
 
+    const targetUserId = currentUserId || DEFAULT_OWNER_PROFILE_ID;
+
     fetchEvents(false);
 
-    const syncPayload = JSON.stringify({ userId: currentUserId });
+    const syncPayload = JSON.stringify({ userId: targetUserId });
 
     fetch("/api/sync/google", {
       method: "POST",
@@ -453,7 +446,7 @@ export default function MoyaspovApp() {
       window.removeEventListener("focus", handleVisibility);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [currentUserId, currentUserEmail, fetchEvents]);
+  }, [isAuthenticated, currentUserId, fetchEvents]);
 
   // Previsualización del texto rápido de Notion
   useEffect(() => {
@@ -480,7 +473,7 @@ export default function MoyaspovApp() {
   const handleSyncNotionText = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!notionInput.trim()) return;
-    if (!currentUserId) {
+    if (!isAuthenticated) {
       setIsNotionModalOpen(false);
       setIsAuthModalOpen(true);
       showNotice("Inicia sesión para agendar citas");
@@ -491,7 +484,10 @@ export default function MoyaspovApp() {
       const res = await fetch("/api/sync/notion", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: notionInput, userId: currentUserId }),
+        body: JSON.stringify({
+          text: notionInput,
+          userId: currentUserId || DEFAULT_OWNER_PROFILE_ID,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Error al procesar");
@@ -512,7 +508,7 @@ export default function MoyaspovApp() {
   };
 
   const handleManualSync = async () => {
-    if (!currentUserId) {
+    if (!isAuthenticated) {
       setIsAuthModalOpen(true);
       showNotice("Inicia sesión para sincronizar tu calendario");
       return;
@@ -522,7 +518,9 @@ export default function MoyaspovApp() {
       await fetch("/api/sync/google", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: currentUserId }),
+        body: JSON.stringify({
+          userId: currentUserId || DEFAULT_OWNER_PROFILE_ID,
+        }),
       });
       await fetchEvents(true);
       showNotice("Sincronizado con Google Calendar");
@@ -532,7 +530,7 @@ export default function MoyaspovApp() {
   };
 
   const openCreateModal = (defaultDate?: string) => {
-    if (!currentUserId) {
+    if (!isAuthenticated) {
       setIsAuthModalOpen(true);
       showNotice("Inicia sesión para agregar citas");
       return;
@@ -577,7 +575,7 @@ export default function MoyaspovApp() {
 
   const handleSaveEvent = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formTitle.trim() || !currentUserId) return;
+    if (!formTitle.trim() || !isAuthenticated) return;
     setSavingEvent(true);
     try {
       const startIso = new Date(
@@ -609,7 +607,7 @@ export default function MoyaspovApp() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            user_id: currentUserId,
+            user_id: currentUserId || DEFAULT_OWNER_PROFILE_ID,
             title: formTitle.trim(),
             description: formDescription.trim() || null,
             event_type: formType,
@@ -618,7 +616,7 @@ export default function MoyaspovApp() {
             start_time: startIso,
             end_time: endIso,
             location: formLocation.trim() || null,
-            color: activeAccent.hex,
+            color: activeTheme.hex,
             source: "webapp",
             initial_note: formInitialNote.trim() || undefined,
           }),
@@ -667,7 +665,7 @@ export default function MoyaspovApp() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          author_id: currentUserId || undefined,
+          author_id: currentUserId || DEFAULT_OWNER_PROFILE_ID,
           content: newNoteContent.trim(),
           note_type: "comment",
         }),
@@ -758,9 +756,9 @@ export default function MoyaspovApp() {
     showNotice("Sesión cerrada");
   };
 
-  // Eventos del día seleccionado (si no hay usuario autenticado o cuenta nueva, retorna [])
+  // Eventos del día seleccionado
   const displayedEvents = useMemo(() => {
-    if (!currentUserId || !currentUserEmail) return [];
+    if (!isAuthenticated) return [];
     const q = searchQuery.trim().toLowerCase();
     return events
       .filter((ev) => {
@@ -778,18 +776,11 @@ export default function MoyaspovApp() {
         (a, b) =>
           new Date(a.start_time).getTime() - new Date(b.start_time).getTime()
       );
-  }, [
-    events,
-    selectedDate,
-    searchQuery,
-    sourceFilter,
-    currentUserId,
-    currentUserEmail,
-  ]);
+  }, [events, selectedDate, searchQuery, sourceFilter, isAuthenticated]);
 
   // Próximas citas cercanas
   const upcomingEvents = useMemo(() => {
-    if (!currentUserId || !currentUserEmail) return [];
+    if (!isAuthenticated) return [];
     const startOfSelected = new Date(
       `${selectedDate}T00:00:00-04:00`
     ).getTime();
@@ -805,7 +796,7 @@ export default function MoyaspovApp() {
           new Date(a.start_time).getTime() - new Date(b.start_time).getTime()
       )
       .slice(0, 4);
-  }, [events, selectedDate, currentUserId, currentUserEmail]);
+  }, [events, selectedDate, isAuthenticated]);
 
   const activeEvent = useMemo(
     () => events.find((e) => e.id === activeEventId) || null,
@@ -821,14 +812,12 @@ export default function MoyaspovApp() {
       const dt = new Date(base);
       dt.setDate(base.getDate() + offset);
       const key = toLocalDateKey(dt.toISOString());
-      const count =
-        currentUserId && currentUserEmail
-          ? events.filter(
-              (ev) =>
-                ev.status !== "cancelled" &&
-                toLocalDateKey(ev.start_time) === key
-            ).length
-          : 0;
+      const count = isAuthenticated
+        ? events.filter(
+            (ev) =>
+              ev.status !== "cancelled" && toLocalDateKey(ev.start_time) === key
+          ).length
+        : 0;
       days.push({
         key,
         dayName: SPANISH_DAYS_SHORT[dt.getDay()],
@@ -838,11 +827,11 @@ export default function MoyaspovApp() {
       });
     }
     return days;
-  }, [selectedDate, events, currentUserId, currentUserEmail]);
+  }, [selectedDate, events, isAuthenticated]);
 
-  // Datos para el Chart Line (completamente vacío si no hay usuario autenticado o si la cuenta es nueva sin eventos)
+  // Datos para el Chart Line
   const chartData: ChartPoint[] = useMemo(() => {
-    if (!currentUserId || !currentUserEmail || events.length === 0) {
+    if (!isAuthenticated || events.length === 0) {
       return [];
     }
 
@@ -894,7 +883,7 @@ export default function MoyaspovApp() {
       }
     }
     return points;
-  }, [events, selectedDate, chartRange, currentUserId, currentUserEmail]);
+  }, [events, selectedDate, chartRange, isAuthenticated]);
 
   const shiftSelectedDate = (daysDelta: number) => {
     const [y, m, d] = selectedDate.split("-").map(Number);
@@ -917,7 +906,7 @@ export default function MoyaspovApp() {
         </div>
       )}
 
-      {/* HEADER / NAVBAR MINIMALISTA — LOGO, TEMA (OSCURO/CLARO), 4 ACENTOS Y AVATAR */}
+      {/* HEADER / NAVBAR MINIMALISTA — QUIET LUXURY */}
       <header className="sticky top-0 z-30 border-b border-[var(--border-subtle)] bg-[var(--bg-primary)]/85 backdrop-blur-xl transition-colors duration-200">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 h-16 sm:h-20 flex items-center justify-between gap-2">
           {/* Únicamente el logo SVG */}
@@ -934,92 +923,34 @@ export default function MoyaspovApp() {
             <MoyaspovLogo size={40} />
           </button>
 
-          {/* Controles derechos: Tema Oscuro/Claro + Selector 4 Colores de Acento + Acciones + Avatar */}
+          {/* Controles derechos + Botón discreto para alternar entre los 2 temas + Avatar circular */}
           <div className="flex items-center gap-1.5 sm:gap-2">
-            {/* Selector minimalista de 4 colores de acento */}
-            <div className="relative">
-              {/* En pantallas medianas/grandes: pastilla minimalista con los 4 puntos de color */}
-              <div className="hidden sm:flex items-center gap-1.5 px-2.5 h-10 rounded-xl bg-[var(--bg-secondary)]/70 border border-[var(--border-subtle)]">
-                {ACCENT_PRESETS.map((preset) => {
-                  const isSelected = preset.key === accentKey;
-                  return (
-                    <button
-                      key={preset.key}
-                      type="button"
-                      onClick={() => setAccentKey(preset.key)}
-                      title={`Acento: ${preset.label}`}
-                      aria-label={`Color de acento ${preset.label}`}
-                      className={`h-4 w-4 rounded-full transition-transform flex items-center justify-center ${
-                        isSelected
-                          ? "scale-110 ring-2 ring-[var(--text-primary)] ring-offset-2 ring-offset-[var(--bg-secondary)]"
-                          : "opacity-65 hover:opacity-100 hover:scale-105"
-                      }`}
-                      style={{ backgroundColor: preset.hex }}
-                    />
-                  );
-                })}
-              </div>
-
-              {/* En teléfono: botón compacto con dropdown minimalista de los 4 colores */}
-              <button
-                type="button"
-                onClick={() => setAccentMenuOpen((prev) => !prev)}
-                title="Cambiar color de acento"
-                aria-label="Cambiar color de acento"
-                className="sm:hidden h-9 w-9 rounded-xl bg-[var(--bg-secondary)]/70 border border-[var(--border-subtle)] flex items-center justify-center transition"
-              >
-                <span
-                  className="h-4 w-4 rounded-full ring-2 ring-[var(--text-primary)]/40"
-                  style={{ backgroundColor: activeAccent.hex }}
-                />
-              </button>
-
-              {accentMenuOpen && (
-                <div className="sm:hidden absolute right-0 mt-2 p-2 rounded-2xl glass-panel border border-[var(--border-subtle)] shadow-xl flex items-center gap-2 z-50">
-                  <Palette className="w-3.5 h-3.5 text-[var(--text-secondary)] ml-1" />
-                  {ACCENT_PRESETS.map((preset) => {
-                    const isSelected = preset.key === accentKey;
-                    return (
-                      <button
-                        key={preset.key}
-                        type="button"
-                        onClick={() => {
-                          setAccentKey(preset.key);
-                          setAccentMenuOpen(false);
-                        }}
-                        title={preset.label}
-                        className={`h-5 w-5 rounded-full transition-transform ${
-                          isSelected
-                            ? "scale-110 ring-2 ring-[var(--text-primary)]"
-                            : "opacity-75"
-                        }`}
-                        style={{ backgroundColor: preset.hex }}
-                      />
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            {/* Botón minimalista Modo Oscuro / Modo Claro */}
+            {/* Único botón discreto para alternar entre el acento original (#D96299) y Cinematic Retro Beige (#C87A53) */}
             <button
               type="button"
               onClick={() =>
-                setThemeMode((prev) => (prev === "dark" ? "light" : "dark"))
+                setThemeStyle((prev) =>
+                  prev === "original" ? "cinematic" : "original"
+                )
               }
               title={
-                themeMode === "dark"
-                  ? "Cambiar a Modo Claro"
-                  : "Cambiar a Modo Oscuro"
+                themeStyle === "original"
+                  ? "Cambiar a Cinematic Retro Beige"
+                  : "Volver al acento original"
               }
-              aria-label="Cambiar tema claro u oscuro"
-              className="h-9 w-9 sm:h-10 sm:w-10 rounded-xl bg-[var(--bg-secondary)]/70 hover:bg-[var(--bg-secondary)] border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--accent)] flex items-center justify-center transition"
+              aria-label="Alternar tema de color"
+              className="h-9 w-9 sm:h-10 sm:w-10 rounded-xl bg-[var(--bg-secondary)]/70 hover:bg-[var(--bg-secondary)] border border-[var(--border-subtle)] hover:border-[var(--accent)] flex items-center justify-center transition group"
             >
-              {themeMode === "dark" ? (
-                <Sun className="w-4 h-4" />
-              ) : (
-                <Moon className="w-4 h-4" />
-              )}
+              <span
+                className="h-3.5 w-3.5 rounded-full transition-transform duration-300 group-hover:scale-110"
+                style={{
+                  background:
+                    themeStyle === "original"
+                      ? "linear-gradient(135deg, #D96299 50%, #C87A53 50%)"
+                      : "linear-gradient(135deg, #C87A53 50%, #EAE0D0 50%)",
+                  boxShadow: "0 0 10px rgba(var(--accent-rgb), 0.35)",
+                }}
+              />
             </button>
 
             {/* Buscar / Filtrar */}
@@ -1068,17 +999,17 @@ export default function MoyaspovApp() {
             </button>
 
             {/* AVATAR EN PEQUEÑO CÍRCULO MINIMALISTA (FOTO O INICIAL) SI INICIÓ SESIÓN */}
-            {currentUserEmail ? (
+            {isAuthenticated ? (
               <button
                 onClick={() => setIsAuthModalOpen(true)}
-                title={userDisplayName || currentUserEmail}
+                title={userDisplayName || currentUserEmail || "Perfil"}
                 aria-label="Perfil de usuario"
                 className="h-9 w-9 sm:h-10 sm:w-10 rounded-full bg-[var(--bg-secondary)] border border-[var(--accent)] p-0.5 flex items-center justify-center transition shadow-sm overflow-hidden shrink-0"
               >
                 {userAvatarUrl && !avatarError ? (
                   <img
                     src={userAvatarUrl}
-                    alt={userDisplayName || currentUserEmail}
+                    alt={userDisplayName || currentUserEmail || "Usuario"}
                     referrerPolicy="no-referrer"
                     onError={() => setAvatarError(true)}
                     className="h-full w-full rounded-full object-cover"
@@ -1279,7 +1210,7 @@ export default function MoyaspovApp() {
                 <div className="glass-panel rounded-3xl p-8 text-center text-xs text-[var(--text-muted)]">
                   Cargando agenda...
                 </div>
-              ) : !currentUserEmail || !currentUserId ? (
+              ) : !isAuthenticated ? (
                 <div className="glass-panel rounded-3xl p-8 text-center space-y-3">
                   <p className="text-sm text-[var(--text-secondary)]">
                     Tu agenda está vacía. Inicia sesión para ver o agendar tus
@@ -1489,8 +1420,8 @@ export default function MoyaspovApp() {
 
               <ActivityChart
                 data={chartData}
-                accentColor={activeAccent.hex}
-                themeMode={themeMode}
+                accentColor={activeTheme.hex}
+                themeStyle={themeStyle}
                 onSelectDate={(dateIso) => {
                   setSelectedDate(dateIso);
                   setMobileSection("agenda");
@@ -1879,14 +1810,14 @@ export default function MoyaspovApp() {
               </button>
             </div>
 
-            {currentUserEmail ? (
+            {isAuthenticated ? (
               <div className="space-y-4">
                 <div className="flex items-center gap-3.5 p-3.5 rounded-2xl bg-[var(--bg-input)] border border-[var(--border-subtle)]">
                   <div className="h-12 w-12 rounded-full bg-[var(--bg-secondary)] border border-[var(--accent)] p-0.5 flex items-center justify-center overflow-hidden shrink-0">
                     {userAvatarUrl && !avatarError ? (
                       <img
                         src={userAvatarUrl}
-                        alt={userDisplayName || currentUserEmail}
+                        alt={userDisplayName || currentUserEmail || "Usuario"}
                         referrerPolicy="no-referrer"
                         onError={() => setAvatarError(true)}
                         className="h-full w-full rounded-full object-cover"

@@ -25,7 +25,7 @@ interface ActivityChartProps {
   data: ChartPoint[];
   metric?: "totalEvents" | "hoursBooked";
   accentColor?: string;
-  themeMode?: "dark" | "light";
+  themeStyle?: "original" | "cinematic";
   onSelectDate?: (dateIso: string) => void;
 }
 
@@ -33,7 +33,7 @@ export function ActivityChart({
   data,
   metric = "totalEvents",
   accentColor = "#D96299",
-  themeMode = "dark",
+  themeStyle = "original",
   onSelectDate,
 }: ActivityChartProps) {
   const hasAnyActivity =
@@ -46,6 +46,14 @@ export function ActivityChart({
       </div>
     );
   }
+
+  const isCinematic = themeStyle === "cinematic";
+  const axisColor = isCinematic ? "#7d7163" : "#71717a";
+  const surfaceBg = isCinematic
+    ? "rgba(23, 20, 18, 0.96)"
+    : "rgba(24, 20, 38, 0.96)";
+  const textColor = isCinematic ? "#eae0d0" : "#f5f3f7";
+  const dotStroke = isCinematic ? "#171412" : "#181426";
 
   return (
     <div className="h-[220px] w-full">
@@ -62,21 +70,21 @@ export function ActivityChart({
           <CartesianGrid
             strokeDasharray="3 3"
             stroke={
-              themeMode === "dark"
-                ? "rgba(255,255,255,0.05)"
-                : "rgba(20,18,30,0.06)"
+              isCinematic
+                ? "rgba(234, 224, 208, 0.06)"
+                : "rgba(255, 255, 255, 0.05)"
             }
             vertical={false}
           />
           <XAxis
             dataKey="label"
-            stroke={themeMode === "dark" ? "#71717a" : "#827f94"}
+            stroke={axisColor}
             fontSize={11}
             tickLine={false}
             axisLine={false}
           />
           <YAxis
-            stroke={themeMode === "dark" ? "#71717a" : "#827f94"}
+            stroke={axisColor}
             fontSize={11}
             tickLine={false}
             axisLine={false}
@@ -85,14 +93,11 @@ export function ActivityChart({
           <Tooltip
             cursor={{ stroke: accentColor, strokeOpacity: 0.3, strokeWidth: 1 }}
             contentStyle={{
-              backgroundColor:
-                themeMode === "dark"
-                  ? "rgba(24, 20, 38, 0.96)"
-                  : "rgba(255, 255, 255, 0.96)",
+              backgroundColor: surfaceBg,
               borderColor: accentColor,
               borderRadius: "12px",
-              boxShadow: "0 10px 25px rgba(0, 0, 0, 0.25)",
-              color: themeMode === "dark" ? "#f4f4f5" : "#14121e",
+              boxShadow: "0 10px 25px rgba(0, 0, 0, 0.4)",
+              color: textColor,
               fontSize: "12px",
             }}
             labelStyle={{ color: accentColor, fontWeight: 600, marginBottom: 2 }}
@@ -107,12 +112,12 @@ export function ActivityChart({
               r: 3.5,
               fill: accentColor,
               strokeWidth: 2,
-              stroke: themeMode === "dark" ? "#181426" : "#ffffff",
+              stroke: dotStroke,
             }}
             activeDot={{
               r: 5.5,
               fill: accentColor,
-              stroke: themeMode === "dark" ? "#ffffff" : "#14121e",
+              stroke: textColor,
               strokeWidth: 2,
             }}
           />
